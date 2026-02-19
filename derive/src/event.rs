@@ -78,8 +78,16 @@ pub(crate) fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    let data_size_lit = proc_macro2::Literal::usize_unsuffixed(data_size);
+
     quote! {
+        #[repr(C)]
         #input
+
+        const _: () = assert!(
+            core::mem::size_of::<#name>() == #data_size_lit,
+            "event struct has padding; cannot use memcpy serialization"
+        );
 
         impl quasar_core::traits::Event for #name {
             const DISCRIMINATOR: &'static [u8] = &[#(#disc_bytes),*];
@@ -87,7 +95,13 @@ pub(crate) fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             #[inline(always)]
             fn write_data(&self, buf: &mut [u8]) {
-                #(#write_stmts)*
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        self as *const Self as *const u8,
+                        buf.as_mut_ptr(),
+                        #data_size_lit,
+                    );
+                }
             }
 
             #[inline(always)]

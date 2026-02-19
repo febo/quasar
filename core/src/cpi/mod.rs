@@ -1,16 +1,112 @@
 pub mod system;
 
-pub use solana_instruction_view::cpi::{invoke_signed, invoke_signed_unchecked, CpiAccount, Signer, Seed};
-pub use solana_instruction_view::{InstructionView, InstructionAccount};
+pub use solana_instruction_view::cpi::{Signer, Seed};
+pub use solana_instruction_view::InstructionAccount;
 
-use solana_account_view::AccountView;
+use core::marker::PhantomData;
+use solana_account_view::{AccountView, RuntimeAccount};
 use solana_address::Address;
 use solana_program_error::ProgramResult;
+
+// --- Raw CPI account (layout-compatible with CpiAccount, uses u8 flags) ---
+
+#[repr(C)]
+pub(crate) struct RawCpiAccount<'a> {
+    address: *const Address,
+    lamports: *const u64,
+    data_len: u64,
+    data: *const u8,
+    owner: *const Address,
+    rent_epoch: u64,
+    is_signer: u8,
+    is_writable: u8,
+    executable: u8,
+    _pad: [u8; 5],
+    _lifetime: PhantomData<&'a AccountView>,
+}
+
+const _: () = assert!(core::mem::size_of::<RawCpiAccount>() == 56);
+const _: () = assert!(core::mem::align_of::<RawCpiAccount>() == 8);
+
+impl<'a> RawCpiAccount<'a> {
+    #[inline(always)]
+    pub(crate) fn from_view(view: &'a AccountView) -> Self {
+        let raw = view.account_ptr();
+        unsafe {
+            let mut account = RawCpiAccount {
+                address: &(*raw).address,
+                lamports: &(*raw).lamports,
+                data_len: (*raw).data_len,
+                data: (raw as *const u8).add(core::mem::size_of::<RuntimeAccount>()),
+                owner: &(*raw).owner,
+                rent_epoch: 0,
+                is_signer: 0,
+                is_writable: 0,
+                executable: 0,
+                _pad: [0u8; 5],
+                _lifetime: PhantomData,
+            };
+            core::ptr::copy_nonoverlapping(
+                (raw as *const u8).add(1),
+                &mut account.is_signer as *mut u8,
+                3,
+            );
+            account
+        }
+    }
+}
+
+// --- Direct syscall wrapper ---
+
+#[cfg(any(target_os = "solana", target_arch = "bpf"))]
+#[repr(C)]
+struct CInstruction<'a> {
+    program_id: *const Address,
+    accounts: *const InstructionAccount<'a>,
+    accounts_len: u64,
+    data: *const u8,
+    data_len: u64,
+}
+
+#[inline(always)]
+pub(crate) unsafe fn invoke_raw(
+    _program_id: *const Address,
+    _instruction_accounts: *const InstructionAccount,
+    _instruction_accounts_len: usize,
+    _data: *const u8,
+    _data_len: usize,
+    _cpi_accounts: *const RawCpiAccount,
+    _cpi_accounts_len: usize,
+    _signers: &[Signer],
+) {
+    #[cfg(any(target_os = "solana", target_arch = "bpf"))]
+    {
+        use solana_define_syscall::definitions::sol_invoke_signed_c;
+
+        let instruction = CInstruction {
+            program_id: _program_id,
+            accounts: _instruction_accounts,
+            accounts_len: _instruction_accounts_len as u64,
+            data: _data,
+            data_len: _data_len as u64,
+        };
+
+        sol_invoke_signed_c(
+            &instruction as *const _ as *const u8,
+            _cpi_accounts as *const u8,
+            _cpi_accounts_len as u64,
+            _signers as *const _ as *const u8,
+            _signers.len() as u64,
+        );
+    }
+}
+
+// --- CpiCall ---
 
 pub struct CpiCall<'a, const ACCTS: usize, const DATA: usize> {
     program_id: &'a Address,
     accounts: [InstructionAccount<'a>; ACCTS],
-    views: [&'a AccountView; ACCTS],
+    cpi_accounts: [RawCpiAccount<'a>; ACCTS],
     data: [u8; DATA],
 }
 
@@ -22,7 +118,17 @@ impl<'a, const ACCTS: usize, const DATA: usize> CpiCall<'a, ACCTS, DATA> {
         views: [&'a AccountView; ACCTS],
         data: [u8; DATA],
     ) -> Self {
-        Self { program_id, accounts, views, data }
+        let cpi_accounts = {
+            let mut arr = core::mem::MaybeUninit::<[RawCpiAccount<'a>; ACCTS]>::uninit();
+            let ptr = arr.as_mut_ptr() as *mut RawCpiAccount<'a>;
+            let mut i = 0;
+            while i < ACCTS {
+                unsafe { core::ptr::write(ptr.add(i), RawCpiAccount::from_view(views[i])) };
+                i += 1;
+            }
+            unsafe { arr.assume_init() }
+        };
+        Self { program_id, accounts, cpi_accounts, data }
     }
 
     #[inline(always)]
@@ -42,24 +148,18 @@ impl<'a, const ACCTS: usize, const DATA: usize> CpiCall<'a, ACCTS, DATA> {
 
     #[inline(always)]
     fn invoke_inner(&self, signers: &[Signer]) -> ProgramResult {
-        let cpi_accounts = {
-            let mut arr = core::mem::MaybeUninit::<[CpiAccount; ACCTS]>::uninit();
-            let ptr = arr.as_mut_ptr() as *mut CpiAccount;
-            let mut i = 0;
-            while i < ACCTS {
-                unsafe { core::ptr::write(ptr.add(i), CpiAccount::from(self.views[i])) };
-                i += 1;
-            }
-            unsafe { arr.assume_init() }
-        };
-
-        let instruction = InstructionView {
-            program_id: self.program_id,
-            accounts: &self.accounts,
-            data: &self.data,
-        };
-
-        unsafe { invoke_signed_unchecked(&instruction, &cpi_accounts, signers) };
+        unsafe {
+            invoke_raw(
+                self.program_id,
+                self.accounts.as_ptr(),
+                ACCTS,
+                self.data.as_ptr(),
+                DATA,
+                self.cpi_accounts.as_ptr(),
+                ACCTS,
+                signers,
+            );
+        }
         Ok(())
     }
 }

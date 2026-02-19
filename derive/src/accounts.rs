@@ -10,6 +10,7 @@ use crate::helpers::{seed_slice_expr_for_parse, is_signer_type, strip_generics, 
 // --- Account field attribute parsing ---
 
 enum AccountDirective {
+    Mut,
     HasOne(Ident),
     Constraint(Expr),
     Seeds(Vec<Expr>),
@@ -18,6 +19,10 @@ enum AccountDirective {
 
 impl Parse for AccountDirective {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.peek(Token![mut]) {
+            let _: Token![mut] = input.parse()?;
+            return Ok(Self::Mut);
+        }
         let key: Ident = input.parse()?;
         match key.to_string().as_str() {
             "has_one" => {
@@ -50,6 +55,7 @@ impl Parse for AccountDirective {
 }
 
 struct AccountFieldAttrs {
+    is_mut: bool,
     has_ones: Vec<Ident>,
     constraints: Vec<Expr>,
     seeds: Option<Vec<Expr>>,
@@ -60,19 +66,21 @@ impl Parse for AccountFieldAttrs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let directives =
             input.parse_terminated(AccountDirective::parse, Token![,])?;
+        let mut is_mut = false;
         let mut has_ones = Vec::new();
         let mut constraints = Vec::new();
         let mut seeds = None;
         let mut bump = None;
         for d in directives {
             match d {
+                AccountDirective::Mut => is_mut = true,
                 AccountDirective::HasOne(ident) => has_ones.push(ident),
                 AccountDirective::Constraint(expr) => constraints.push(expr),
                 AccountDirective::Seeds(s) => seeds = Some(s),
                 AccountDirective::Bump(b) => bump = Some(b),
             }
         }
-        Ok(Self { has_ones, constraints, seeds, bump })
+        Ok(Self { is_mut, has_ones, constraints, seeds, bump })
     }
 }
 
@@ -85,6 +93,7 @@ fn parse_field_attrs(field: &syn::Field) -> AccountFieldAttrs {
         }
     }
     AccountFieldAttrs {
+        is_mut: false,
         has_ones: vec![],
         constraints: vec![],
         seeds: None,
@@ -109,30 +118,14 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
     let field_names: Vec<_> = fields.iter().map(|f| &f.ident).collect();
 
-    let field_constructs: Vec<proc_macro2::TokenStream> = fields.iter().map(|f| {
-        let name = &f.ident;
-        match &f.ty {
-            Type::Reference(type_ref) => {
-                let base_type = strip_generics(&type_ref.elem);
-                if type_ref.mutability.is_some() {
-                    quote! { #name: #base_type::from_account_view_mut(#name)? }
-                } else {
-                    quote! { #name: #base_type::from_account_view(#name)? }
-                }
-            }
-            _ => {
-                let base_type = strip_generics(&f.ty);
-                quote! { #name: #base_type::from_account_view(#name)? }
-            }
-        }
-    }).collect();
-
     let field_name_strings: Vec<String> = fields.iter()
         .filter_map(|f| f.ident.as_ref().map(|i| i.to_string()))
         .collect();
 
+    let mut field_constructs: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut has_one_checks: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut constraint_checks: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut mut_checks: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut pda_checks: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut bump_init_vars: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut bump_struct_fields: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -143,6 +136,31 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
     for field in fields.iter() {
         let attrs = parse_field_attrs(field);
         let field_name = field.ident.as_ref().unwrap();
+
+        let is_ref_mut = matches!(&field.ty, Type::Reference(r) if r.mutability.is_some());
+
+        match &field.ty {
+            Type::Reference(type_ref) => {
+                let base_type = strip_generics(&type_ref.elem);
+                if type_ref.mutability.is_some() {
+                    field_constructs.push(quote! { #field_name: #base_type::from_account_view_mut(#field_name)? });
+                } else {
+                    field_constructs.push(quote! { #field_name: #base_type::from_account_view(#field_name)? });
+                }
+            }
+            _ => {
+                let base_type = strip_generics(&field.ty);
+                field_constructs.push(quote! { #field_name: #base_type::from_account_view(#field_name)? });
+            }
+        }
+
+        if attrs.is_mut && !is_ref_mut {
+            mut_checks.push(quote! {
+                if !#field_name.to_account_view().is_writable() {
+                    return Err(ProgramError::Immutable);
+                }
+            });
+        }
 
         for target in &attrs.has_ones {
             has_one_checks.push(quote! {
@@ -304,6 +322,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
     let has_any_checks = !has_one_checks.is_empty()
         || !constraint_checks.is_empty()
+        || !mut_checks.is_empty()
         || !pda_checks.is_empty();
 
     let parse_body = if has_any_checks {
@@ -322,6 +341,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
             {
                 let Self { #(ref #field_names,)* } = result;
+                #(#mut_checks)*
                 #(#has_one_checks)*
                 #(#constraint_checks)*
                 #(#pda_checks)*
@@ -364,7 +384,8 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
     let account_metas_str: String = fields.iter().map(|f| {
         let field_name = f.ident.as_ref().unwrap().to_string();
-        let writable = matches!(&f.ty, Type::Reference(r) if r.mutability.is_some());
+        let attrs = parse_field_attrs(f);
+        let writable = attrs.is_mut || matches!(&f.ty, Type::Reference(r) if r.mutability.is_some());
         let signer = is_signer_type(&f.ty);
         if writable {
             format!("quasar_core::client::AccountMeta::new(ix.{}, {}),", field_name, signer)

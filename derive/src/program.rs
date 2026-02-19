@@ -145,41 +145,29 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
     if let Some((_, ref mut items)) = module.content {
         items.push(syn::parse_quote! {
             fn __handle_event(ptr: *mut u8, instruction_data: &[u8]) -> Result<(), ProgramError> {
-                let num_accounts = unsafe { *(ptr as *const u64) };
-                if num_accounts < 1 {
-                    return Err(ProgramError::NotEnoughAccountKeys);
-                }
-
-                let __accounts_start = unsafe { (ptr as *mut u8).add(core::mem::size_of::<u64>()) };
-
-                let mut __buf = core::mem::MaybeUninit::<[AccountView; 1]>::uninit();
                 unsafe {
-                    let raw = __accounts_start as *mut quasar_core::__private::RuntimeAccount;
-                    let base = __buf.as_mut_ptr() as *mut AccountView;
-                    if (*raw).borrow_state == quasar_core::__private::NOT_BORROWED {
-                        core::ptr::write(base, AccountView::new_unchecked(raw));
-                    } else {
-                        return Err(ProgramError::AccountBorrowFailed);
-                    }
-                }
-                let __accounts = unsafe { __buf.assume_init() };
-                let event_authority = &__accounts[0];
+                    let raw = ptr.add(core::mem::size_of::<u64>()) as *const quasar_core::__private::RuntimeAccount;
 
-                if !event_authority.is_signer() {
-                    return Err(ProgramError::MissingRequiredSignature);
+                    if (*raw).is_signer == 0 {
+                        return Err(ProgramError::MissingRequiredSignature);
+                    }
+
+                    let addr = &(*raw).address as *const _ as *const u64;
+                    let expected = super::EventAuthority::ADDRESS.as_ref().as_ptr() as *const u64;
+                    if *addr != *expected
+                        || *addr.add(1) != *expected.add(1)
+                        || *addr.add(2) != *expected.add(2)
+                        || *addr.add(3) != *expected.add(3)
+                    {
+                        return Err(ProgramError::InvalidSeeds);
+                    }
                 }
 
                 if instruction_data.len() <= 1 {
                     return Err(ProgramError::InvalidInstructionData);
                 }
 
-                if *event_authority.address() != super::EventAuthority::ADDRESS {
-                    return Err(ProgramError::InvalidSeeds);
-                }
-
-                let event_data = &instruction_data[1..];
-                quasar_core::log::log_data(&[event_data]);
-
+                quasar_core::log::log_data(&[&instruction_data[1..]]);
                 Ok(())
             }
         });

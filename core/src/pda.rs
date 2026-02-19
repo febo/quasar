@@ -40,6 +40,18 @@ pub fn create_program_address(
     }
 }
 
+/// Find a valid program derived address and its bump seed at compile time.
+///
+/// Uses `const_crypto` for const-compatible SHA-256 hashing and Ed25519
+/// off-curve evaluation, making this suitable for `const` contexts.
+pub const fn find_program_address_const(
+    seeds: &[&[u8]],
+    program_id: &Address,
+) -> (Address, u8) {
+    let (bytes, bump) = const_crypto::ed25519::derive_program_address(seeds, program_id.as_array());
+    (Address::new_from_array(bytes), bump)
+}
+
 /// Find a valid program derived address and its bump seed.
 ///
 /// Same `Seed`-native approach as `create_program_address`. On SBF, the

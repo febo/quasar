@@ -11,5 +11,5 @@ pub use crate::error::QuasarError;
 pub use crate::sysvars::Sysvar;
 pub use crate::cpi::Seed;
 pub use crate::cpi::system::SystemProgram;
-pub use quasar_derive::{Accounts, instruction, account, error_code, program, event};
+pub use quasar_derive::{Accounts, instruction, account, error_code, program, event, emit_cpi};
 pub use crate::{no_alloc, panic_handler, dispatch, emit};

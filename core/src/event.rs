@@ -7,9 +7,8 @@ pub fn emit_event_cpi(
     program: &AccountView,
     event_authority: &AccountView,
     instruction_data: &[u8],
+    bump: u8,
 ) -> Result<(), ProgramError> {
-    let bump = instruction_data[instruction_data.len() - 1];
-
     let instruction = InstructionView {
         program_id: program.address(),
         accounts: &[InstructionAccount::readonly_signer(event_authority.address())],

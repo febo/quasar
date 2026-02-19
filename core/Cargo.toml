@@ -10,6 +10,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [dependencies]
 quasar-derive = { path = "../derive" }
+const-crypto = "0.3.0"
 wincode = { version = "0.4.4", features = ["derive"] }
 solana-program-error = "3.0.0"
 solana-account-view = "1.0.0"

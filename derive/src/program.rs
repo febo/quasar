@@ -145,6 +145,9 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
     if let Some((_, ref mut items)) = module.content {
         items.push(syn::parse_quote! {
             fn __handle_event(ptr: *mut u8, instruction_data: &[u8]) -> Result<(), ProgramError> {
+                // SAFETY: Pointer arithmetic follows the SVM input buffer layout. The u64 casts
+                // for address comparison are technically misaligned (Address is align 1), but SBF
+                // handles unaligned access natively — this 4×u64 compare saves ~20 CU vs memcmp.
                 unsafe {
                     let raw = ptr.add(core::mem::size_of::<u64>()) as *const quasar_core::__private::RuntimeAccount;
 
@@ -187,6 +190,9 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
         items.push(syn::parse_quote! {
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn entrypoint(ptr: *mut u8, instruction_data: *const u8) -> u64 {
+                // SAFETY: SVM places instruction data length as u64 at offset -8 from the data
+                // pointer. The read is technically misaligned in the abstract machine, but the SVM
+                // buffer is 8-byte aligned and SBF handles unaligned access natively.
                 let instruction_data = unsafe {
                     core::slice::from_raw_parts(
                         instruction_data,

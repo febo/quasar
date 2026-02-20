@@ -14,8 +14,6 @@ pub struct Make<'info> {
     pub rent: &'info Rent,
     pub token_program: &'info TokenProgram,
     pub system_program: &'info SystemProgram,
-    pub event_authority: &'info crate::EventAuthority,
-    pub program: &'info crate::QuasarEscrowProgram,
 }
 
 impl<'info> Make<'info> {
@@ -41,14 +39,15 @@ impl<'info> Make<'info> {
 
     #[inline(always)]
     pub fn emit_event(&self, deposit: u64, receive: u64) -> Result<(), ProgramError> {
-        emit_cpi!(MakeEvent {
+        emit!(MakeEvent {
             escrow: *self.escrow.address(),
             maker: *self.maker.address(),
             mint_a: *self.maker_ta_a.mint(),
             mint_b: *self.maker_ta_b.mint(),
             deposit,
             receive,
-        })
+        });
+        Ok(())
     }
 
     #[inline(always)]

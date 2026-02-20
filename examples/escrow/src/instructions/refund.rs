@@ -15,8 +15,6 @@ pub struct Refund<'info> {
     pub maker_ta_a: &'info mut Account<TokenAccount>,
     pub vault_ta_a: &'info mut Account<TokenAccount>,
     pub token_program: &'info TokenProgram,
-    pub event_authority: &'info crate::EventAuthority,
-    pub program: &'info crate::QuasarEscrowProgram,
 }
 
 impl<'info> Refund<'info> {
@@ -40,9 +38,10 @@ impl<'info> Refund<'info> {
 
     #[inline(always)]
     pub fn emit_event(&self) -> Result<(), ProgramError> {
-        emit_cpi!(RefundEvent {
+        emit!(RefundEvent {
             escrow: *self.escrow.address(),
-        })
+        });
+        Ok(())
     }
     
     #[inline(always)]

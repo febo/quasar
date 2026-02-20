@@ -19,6 +19,9 @@ const SIMD0194_MAX_LAMPORTS_PER_BYTE: u64 = 1_759_197_129_867;
 const CURRENT_MAX_LAMPORTS_PER_BYTE: u64 = 879_598_564_933;
 pub const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
 
+// Intentionally 16 bytes: the full Rent sysvar is 17 bytes (includes
+// burn_percent: u8 at offset 16), but burn_percent is unused so we
+// only read the first 16 bytes via impl_sysvar_get with padding = 0.
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct Rent {
@@ -40,6 +43,12 @@ impl Rent {
         }))
     }
 
+    /// # Safety
+    ///
+    /// Caller must ensure `bytes.len() >= size_of::<Rent>()` and that the data is
+    /// a valid Rent sysvar. The cast from `&[u8]` to `&Rent` is technically misaligned
+    /// (Rent has align 8, slice pointer has align 1), but SBF handles unaligned access
+    /// natively — this is the standard pattern across all Solana frameworks.
     #[inline(always)]
     pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> &Self {
         unsafe { &*(bytes.as_ptr() as *const Rent) }

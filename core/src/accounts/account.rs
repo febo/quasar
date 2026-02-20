@@ -1,8 +1,7 @@
 use core::marker::PhantomData;
 use crate::sysvars::Sysvar;
 use crate::prelude::*;
-
-static ZERO_ADDRESS: Address = Address::new_from_array([0u8; 32]);
+use crate::cpi::system::SYSTEM_PROGRAM_ID;
 
 #[repr(transparent)]
 pub struct Account<T: Owner> {
@@ -34,6 +33,13 @@ impl<T: Owner + AccountCheck> Account<T> {
         Ok(unsafe { &*(view as *const AccountView as *const Self) })
     }
 
+    /// # Safety (invalid_reference_casting)
+    ///
+    /// `Self` is `#[repr(transparent)]` over `AccountView`, which uses interior
+    /// mutability through raw pointers to SVM account memory. The `&` → `&mut`
+    /// cast does not create aliased mutable references to backing memory — all
+    /// writes go through `AccountView`'s raw pointer methods. This pattern is
+    /// standard in Solana frameworks (Pinocchio uses the same approach).
     #[inline(always)]
     #[allow(invalid_reference_casting)]
     pub fn from_account_view_mut(view: &AccountView) -> Result<&mut Self, ProgramError> {
@@ -71,7 +77,7 @@ impl<T: QuasarAccount + Owner> Account<T> {
         let view = self.to_account_view();
         destination.set_lamports(destination.lamports() + view.lamports());
         view.set_lamports(0);
-        unsafe { view.assign(&ZERO_ADDRESS) };
+        unsafe { view.assign(&SYSTEM_PROGRAM_ID) };
         view.resize(0)?;
         Ok(())
     }
@@ -109,6 +115,9 @@ impl<T: QuasarAccount + Owner> Account<T> {
 impl<T: ZeroCopyDeref> core::ops::Deref for Account<T> {
     type Target = T::Target;
 
+    /// SAFETY: Bounds validated by `AccountCheck::check` during `from_account_view`.
+    /// ZC companion structs have compile-time `assert!(align_of::<Zc>() == 1)`,
+    /// so the cast from account data pointer (align 1) is always well-aligned.
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         unsafe { &*(self.to_account_view().data_ptr().add(T::DATA_OFFSET) as *const T::Target) }
@@ -116,6 +125,7 @@ impl<T: ZeroCopyDeref> core::ops::Deref for Account<T> {
 }
 
 impl<T: ZeroCopyDeref> core::ops::DerefMut for Account<T> {
+    /// SAFETY: Same as Deref — bounds checked upstream, alignment 1 guaranteed.
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *(self.to_account_view().data_ptr().add(T::DATA_OFFSET) as *mut T::Target) }

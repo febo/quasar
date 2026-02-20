@@ -26,6 +26,13 @@ macro_rules! define_account {
                 Ok(unsafe { &*(view as *const AccountView as *const Self) })
             }
 
+            /// # Safety (invalid_reference_casting)
+            ///
+            /// `Self` is `#[repr(transparent)]` over `AccountView`, which uses
+            /// interior mutability through raw pointers to SVM account memory.
+            /// The `&` → `&mut` cast does not create aliased mutable references
+            /// to backing memory — all writes go through `AccountView`'s raw
+            /// pointer methods. Standard pattern in Solana frameworks (Pinocchio).
             #[inline(always)]
             #[allow(invalid_reference_casting)]
             pub fn from_account_view_mut(view: &AccountView) -> Result<&mut Self, ProgramError> {

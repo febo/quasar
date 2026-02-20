@@ -5,7 +5,7 @@ use crate::traits::{AsAccountView, Program};
 use crate::checks;
 use super::{CpiCall, InstructionAccount};
 
-static SYSTEM_PROGRAM_ID: Address = Address::new_from_array([0u8; 32]);
+pub const SYSTEM_PROGRAM_ID: Address = Address::new_from_array([0u8; 32]);
 
 // --- Free functions (used by derive macro init_signed + account realloc) ---
 
@@ -18,6 +18,8 @@ pub fn create_account<'a>(
     owner: &'a Address,
 ) -> CpiCall<'a, 2, 52> {
     let lamports: u64 = lamports.into();
+    // SAFETY: All 52 bytes are written before assume_init. The u32 write at offset 0
+    // is technically misaligned (buf has align 1), but SBF handles unaligned access natively.
     let data = unsafe {
         let mut buf = core::mem::MaybeUninit::<[u8; 52]>::uninit();
         let ptr = buf.as_mut_ptr() as *mut u8;
@@ -100,6 +102,8 @@ impl SystemProgram {
         let to = to.to_account_view();
         let lamports: u64 = lamports.into();
 
+        // SAFETY: All 52 bytes are written before assume_init. The u32 write at offset 0
+        // is technically misaligned (buf has align 1), but SBF handles unaligned access natively.
         let data = unsafe {
             let mut buf = core::mem::MaybeUninit::<[u8; 52]>::uninit();
             let ptr = buf.as_mut_ptr() as *mut u8;

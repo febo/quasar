@@ -1,0 +1,46 @@
+#![no_std]
+
+use pinocchio::{
+    AccountView, Address,
+    program_entrypoint, no_allocator,
+    ProgramResult,
+};
+
+mod constants;
+mod errors;
+mod state;
+mod instructions;
+mod utils;
+
+#[cfg(test)]
+mod tests;
+
+pub use constants::{ID, ID_BYTES};
+pub use errors::EscrowError;
+
+use utils::Context;
+
+program_entrypoint!(process_instruction);
+no_allocator!();
+
+#[cfg(all(not(test), target_os = "solana"))]
+pinocchio::nostd_panic_handler!();
+
+fn process_instruction(
+    _program_id: &Address,
+    accounts: &[AccountView],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let (discriminator, data) = instruction_data
+        .split_first()
+        .ok_or(EscrowError::InvalidInstructionData)?;
+
+    let ctx = Context { accounts, data };
+
+    match *discriminator {
+        0 => instructions::Make::process(ctx),
+        1 => instructions::Take::process(ctx),
+        2 => instructions::Refund::process(ctx),
+        _ => Err(EscrowError::InvalidInstructionData.into()),
+    }
+}

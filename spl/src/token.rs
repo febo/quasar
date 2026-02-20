@@ -102,3 +102,4 @@ impl TokenAccountState {
 }
 
 const _ASSERT_TOKEN_ACCOUNT_LEN: () = assert!(TokenAccountState::LEN == 165);
+const _ASSERT_TOKEN_ACCOUNT_ALIGN: () = assert!(core::mem::align_of::<TokenAccountState>() == 1);

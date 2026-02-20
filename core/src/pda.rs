@@ -35,8 +35,8 @@ pub fn create_program_address(
 
     #[cfg(not(any(target_os = "solana", target_arch = "bpf")))]
     {
-        core::hint::black_box((seeds, program_id));
-        Ok(Address::default())
+        let _ = (seeds, program_id);
+        panic!("create_program_address requires the Solana runtime");
     }
 }
 
@@ -76,13 +76,13 @@ pub fn find_program_address(
         };
         match result {
             0 => (unsafe { bytes.assume_init() }, bump),
-            _ => unsafe { core::hint::unreachable_unchecked() },
+            _ => panic!("find_program_address syscall failed"),
         }
     }
 
     #[cfg(not(any(target_os = "solana", target_arch = "bpf")))]
     {
-        core::hint::black_box((seeds, program_id));
-        (Address::default(), u8::MAX)
+        let _ = (seeds, program_id);
+        panic!("find_program_address requires the Solana runtime");
     }
 }

@@ -1735,6 +1735,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "pinocchio"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c06810dac15a4ef83d3dabdb4f2f22fb39c9adff669cd2781da4f716510a647c"
+dependencies = [
+ "solana-account-view",
+ "solana-address 2.2.0",
+ "solana-define-syscall 4.0.1",
+ "solana-instruction-view",
+ "solana-program-error",
+]
+
+[[package]]
+name = "pinocchio-escrow"
+version = "0.1.0"
+dependencies = [
+ "mollusk-svm",
+ "mollusk-svm-programs-token",
+ "pinocchio",
+ "pinocchio-system",
+ "pinocchio-token",
+ "solana-account",
+ "solana-address 2.2.0",
+ "solana-instruction",
+ "solana-program-pack",
+ "spl-token-interface",
+]
+
+[[package]]
+name = "pinocchio-system"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24044a0815753862b558e179e78f03f7344cb755de48617a09d7d23b50883b6c"
+dependencies = [
+ "pinocchio",
+ "solana-address 2.2.0",
+]
+
+[[package]]
+name = "pinocchio-token"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "febf3bbe37f4e2723b9b41a1768c6542a1ae1b1d7bcac27f892f30cabcf70ec4"
+dependencies = [
+ "solana-account-view",
+ "solana-address 2.2.0",
+ "solana-instruction-view",
+ "solana-program-error",
+]
+
+[[package]]
 name = "pkcs8"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -128,10 +128,12 @@ pub(crate) fn account(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 {
                     let __existing = unsafe { view.borrow_unchecked() };
-                    if __existing.len() >= Self::DISCRIMINATOR.len()
-                        && __existing[..Self::DISCRIMINATOR.len()] == *Self::DISCRIMINATOR
-                    {
-                        return Err(QuasarError::AccountAlreadyInitialized.into());
+                    if __existing.len() >= #disc_len {
+                        #(
+                            if unsafe { *__existing.get_unchecked(#disc_indices) } != 0 {
+                                return Err(QuasarError::AccountAlreadyInitialized.into());
+                            }
+                        )*
                     }
                 }
 

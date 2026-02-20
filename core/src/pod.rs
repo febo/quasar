@@ -1,3 +1,9 @@
+// Pod types (`PodU64`, `PodU32`, etc.) provide alignment-1 integer wrappers
+// for zero-copy account access. Arithmetic operators (`+`, `-`, `*`) use
+// wrapping semantics in release mode for CU efficiency. Always use
+// `checked_add`, `checked_sub`, `checked_mul`, `checked_div` for
+// calculations where overflow must be detected (e.g. token amounts).
+
 use core::fmt;
 
 macro_rules! define_pod_unsigned {

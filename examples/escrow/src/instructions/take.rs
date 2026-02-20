@@ -21,8 +21,6 @@ pub struct Take<'info> {
     pub maker_ta_b: &'info mut Account<TokenAccount>,
     pub vault_ta_a: &'info mut Account<TokenAccount>,
     pub token_program: &'info TokenProgram,
-    pub event_authority: &'info crate::EventAuthority,
-    pub program: &'info crate::QuasarEscrowProgram,
 }
 
 impl<'info> Take<'info> {
@@ -56,9 +54,10 @@ impl<'info> Take<'info> {
 
     #[inline(always)]
     pub fn emit_event(&self) -> Result<(), ProgramError> {
-        emit_cpi!(TakeEvent {
+        emit!(TakeEvent {
             escrow: *self.escrow.address(),
-        })
+        });
+        Ok(())
     }
 
     #[inline(always)]

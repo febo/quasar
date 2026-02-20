@@ -566,7 +566,7 @@ Quasar uses `unsafe` for zero-copy access, raw CPI syscalls, and pointer casts. 
 
 ### Miri Validation
 
-Every unsafe code path is tested under [Miri](https://github.com/rust-lang/miri) with Tree Borrows and symbolic alignment checking. The test suite covers 42 patterns including `& -> &mut` casts, `copy_nonoverlapping` flag extraction, `MaybeUninit` array initialization, event memcpy, CPI data construction, and remaining accounts pointer arithmetic.
+Every unsafe code path is tested under [Miri](https://github.com/rust-lang/miri) with Tree Borrows and symbolic alignment checking. The test suite covers 55 patterns including `& -> &mut` casts, `copy_nonoverlapping` flag extraction, `MaybeUninit` array initialization, event memcpy, CPI data construction, remaining accounts pointer arithmetic, dynamic field ZC header casts, `from_utf8_unchecked` string access, `slice::from_raw_parts` for Vec fields, `ptr::copy` memmove for field shifting, stack buffer batch writes, and instruction data variable tail parsing.
 
 ### Design Choices
 

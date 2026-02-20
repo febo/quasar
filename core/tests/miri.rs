@@ -38,6 +38,14 @@
 //! | CPI `create_account` data construction | Sound (was misaligned u32, fixed) |
 //! | Boundary pointer subtraction (`data.as_ptr().sub(8)`) | Sound |
 //! | Remaining accounts alignment rounding | **Provenance warning** — integer-to-pointer cast strips provenance. Fails under `-Zmiri-strict-provenance`. Not UB under default provenance model. |
+//! | Dynamic ZC header cast + PodU16 descriptor read | Sound |
+//! | `from_utf8_unchecked` on account data String fields | Sound |
+//! | `slice::from_raw_parts` for Vec field access | Sound |
+//! | `ptr::copy` (memmove) for shifting subsequent dynamic fields | Sound |
+//! | `slice::from_raw_parts_mut` for Vec in-place mutation | Sound |
+//! | `copy_nonoverlapping` for Vec data writes | Sound |
+//! | Stack buffer batch write (`set_dynamic_fields` pattern) | Sound |
+//! | Instruction data ZC cast + variable tail parsing | Sound |
 //!
 //! ## What Miri CANNOT test
 //!
@@ -1629,4 +1637,617 @@ fn sysvar_get_maybeuninit_write_bytes_assume_init() {
 
     // Zero-initialized Rent: lamports_per_byte=0, exemption_threshold=[0;8]
     assert_eq!(rent.minimum_balance_unchecked(100), 0);
+}
+
+// ===========================================================================
+// 19. Dynamic account fields — ZC header cast + offset scan + slice access
+//
+// The #[account] macro generates code for dynamic fields (String/Vec) that:
+//   1. Casts account data to a ZC companion struct with PodU16 descriptors
+//   2. Reads descriptor values to compute offsets into a variable tail
+//   3. Creates &str via from_utf8_unchecked or &[T] via slice::from_raw_parts
+//
+// These tests simulate the exact unsafe patterns from generate_dynamic_account.
+// ===========================================================================
+
+/// Simulated ZC companion struct for a dynamic account:
+///   fixed: Address (32 bytes)
+///   name_len: PodU16
+///   tags_count: PodU16
+///   [tail: name bytes | tag elements (Address)]
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct DynTestZc {
+    fixed: [u8; 32],
+    name_len: PodU16,
+    tags_count: PodU16,
+}
+
+const _: () = assert!(align_of::<DynTestZc>() == 1);
+const _: () = assert!(size_of::<DynTestZc>() == 36);
+
+const DYN_DISC_LEN: usize = 1;
+const DYN_HEADER_SIZE: usize = DYN_DISC_LEN + size_of::<DynTestZc>();
+
+/// Build a dynamic account buffer with discriminator, ZC header, and variable tail.
+fn make_dyn_buffer(name: &[u8], tags: &[[u8; 32]]) -> AccountBuffer {
+    let tail_size = name.len() + tags.len() * 32;
+    let data_len = DYN_HEADER_SIZE + tail_size;
+    let mut buf = AccountBuffer::new(data_len);
+    buf.init(
+        [1u8; 32],
+        TEST_OWNER.to_bytes(),
+        1_000_000,
+        data_len as u64,
+        false,
+        true,
+    );
+
+    let mut data = vec![0u8; data_len];
+    // Discriminator
+    data[0] = 0x05;
+    // ZC header: fixed field
+    data[DYN_DISC_LEN..DYN_DISC_LEN + 32].copy_from_slice(&[0xAA; 32]);
+    // ZC header: name_len
+    let name_len_offset = DYN_DISC_LEN + 32;
+    data[name_len_offset..name_len_offset + 2]
+        .copy_from_slice(&(name.len() as u16).to_le_bytes());
+    // ZC header: tags_count
+    let tags_count_offset = name_len_offset + 2;
+    data[tags_count_offset..tags_count_offset + 2]
+        .copy_from_slice(&(tags.len() as u16).to_le_bytes());
+    // Tail: name bytes
+    let tail_start = DYN_HEADER_SIZE;
+    data[tail_start..tail_start + name.len()].copy_from_slice(name);
+    // Tail: tag addresses
+    let tags_start = tail_start + name.len();
+    for (i, tag) in tags.iter().enumerate() {
+        data[tags_start + i * 32..tags_start + (i + 1) * 32].copy_from_slice(tag);
+    }
+
+    buf.write_data(&data);
+    buf
+}
+
+#[test]
+fn dynamic_zc_header_cast_and_descriptor_read() {
+    // Simulate: let __zc = unsafe { &*(data[disc_len..].as_ptr() as *const Zc) };
+    // Then read PodU16 descriptors.
+    let name = b"hello";
+    let tags: &[[u8; 32]] = &[[0xBB; 32], [0xCC; 32]];
+    let mut buf = make_dyn_buffer(name, tags);
+    let view = unsafe { buf.view() };
+    let data = unsafe { view.borrow_unchecked() };
+
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+
+    assert_eq!(zc.name_len.get(), 5);
+    assert_eq!(zc.tags_count.get(), 2);
+    assert_eq!(&zc.fixed, &[0xAA; 32]);
+}
+
+#[test]
+fn dynamic_string_accessor_from_utf8_unchecked() {
+    // Simulate the name() accessor:
+    //   offset = disc_len + sizeof(Zc)
+    //   len = zc.name_len.get()
+    //   from_utf8_unchecked(&data[offset..offset + len])
+    let name = b"world";
+    let mut buf = make_dyn_buffer(name, &[]);
+    let view = unsafe { buf.view() };
+    let data = unsafe { view.borrow_unchecked() };
+
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+    let offset = DYN_HEADER_SIZE;
+    let len = zc.name_len.get() as usize;
+    let s = unsafe { core::str::from_utf8_unchecked(&data[offset..offset + len]) };
+
+    assert_eq!(s, "world");
+}
+
+#[test]
+fn dynamic_vec_accessor_slice_from_raw_parts() {
+    // Simulate the tags() accessor:
+    //   offset = disc_len + sizeof(Zc) + name_len
+    //   count = zc.tags_count.get()
+    //   slice::from_raw_parts(data[offset..].as_ptr() as *const Address, count)
+    let name = b"hi";
+    let tags = [[0x11; 32], [0x22; 32], [0x33; 32]];
+    let mut buf = make_dyn_buffer(name, &tags);
+    let view = unsafe { buf.view() };
+    let data = unsafe { view.borrow_unchecked() };
+
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+    let name_len = zc.name_len.get() as usize;
+    let offset = DYN_HEADER_SIZE + name_len;
+    let count = zc.tags_count.get() as usize;
+
+    let slice: &[Address] =
+        unsafe { core::slice::from_raw_parts(data[offset..].as_ptr() as *const Address, count) };
+
+    assert_eq!(slice.len(), 3);
+    assert_eq!(slice[0].as_array(), &[0x11; 32]);
+    assert_eq!(slice[1].as_array(), &[0x22; 32]);
+    assert_eq!(slice[2].as_array(), &[0x33; 32]);
+}
+
+#[test]
+fn dynamic_empty_fields() {
+    // Edge case: both dynamic fields are empty (length 0, count 0).
+    // Slices should be valid zero-length.
+    let mut buf = make_dyn_buffer(b"", &[]);
+    let view = unsafe { buf.view() };
+    let data = unsafe { view.borrow_unchecked() };
+
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+
+    assert_eq!(zc.name_len.get(), 0);
+    assert_eq!(zc.tags_count.get(), 0);
+
+    let offset = DYN_HEADER_SIZE;
+    let s = unsafe { core::str::from_utf8_unchecked(&data[offset..offset]) };
+    assert_eq!(s, "");
+
+    let slice: &[Address] =
+        unsafe { core::slice::from_raw_parts(data[offset..].as_ptr() as *const Address, 0) };
+    assert_eq!(slice.len(), 0);
+}
+
+// ===========================================================================
+// 20. Dynamic fields — batch read (dynamic_fields pattern)
+//
+// dynamic_fields() does one ZC cast + linear walk through all descriptors,
+// accumulating offset. This tests the exact walk pattern.
+// ===========================================================================
+
+#[test]
+fn dynamic_batch_read_linear_scan() {
+    // Simulate dynamic_fields():
+    //   let zc = cast to ZC header
+    //   let mut offset = disc_len + sizeof(Zc)
+    //   for each field: extract slice, offset += size
+    let name = b"alice";
+    let tags = [[0xDD; 32]];
+    let mut buf = make_dyn_buffer(name, &tags);
+    let view = unsafe { buf.view() };
+    let data = unsafe { view.borrow_unchecked() };
+
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+    let mut offset = DYN_HEADER_SIZE;
+
+    // Field 1: name (String)
+    let name_len = zc.name_len.get() as usize;
+    let name_str = unsafe { core::str::from_utf8_unchecked(&data[offset..offset + name_len]) };
+    offset += name_len;
+
+    // Field 2: tags (Vec<Address>)
+    let tags_count = zc.tags_count.get() as usize;
+    let tags_slice: &[Address] =
+        unsafe { core::slice::from_raw_parts(data[offset..].as_ptr() as *const Address, tags_count) };
+    offset += tags_count * size_of::<Address>();
+    let _ = offset;
+
+    assert_eq!(name_str, "alice");
+    assert_eq!(tags_slice.len(), 1);
+    assert_eq!(tags_slice[0].as_array(), &[0xDD; 32]);
+}
+
+// ===========================================================================
+// 21. Dynamic fields — ptr::copy (memmove) for field shifting
+//
+// Individual setters shift subsequent fields via ptr::copy when a dynamic
+// field changes size. Source and destination overlap.
+// ===========================================================================
+
+#[test]
+fn dynamic_memmove_shift_subsequent_fields() {
+    // Simulate set_name() growing the name field, shifting tags forward.
+    // Initial: name="hi" (2 bytes), tags=[[0xBB;32]] (32 bytes)
+    // After:   name="hello" (5 bytes), tags must shift +3 bytes
+    let name = b"hi";
+    let tags = [[0xBB; 32]];
+    let mut buf = make_dyn_buffer(name, &tags);
+    let view = unsafe { buf.view() };
+
+    let old_data_len = DYN_HEADER_SIZE + 2 + 32; // 37 + 2 + 32 = 71
+    assert_eq!(view.data_len(), old_data_len);
+
+    // Grow the account (simulate realloc)
+    let new_name = b"hello";
+    let new_data_len = DYN_HEADER_SIZE + new_name.len() + 32; // 37 + 5 + 32 = 74
+    view.resize(new_data_len).unwrap();
+
+    let data = unsafe { view.borrow_unchecked_mut() };
+
+    // Shift tail (tags) forward: memmove from offset 39 to offset 42
+    let old_field_end = DYN_HEADER_SIZE + 2; // end of old name
+    let new_field_end = DYN_HEADER_SIZE + 5; // end of new name
+    let tail_len = 32; // tags data
+
+    // ptr::copy handles overlap
+    unsafe {
+        core::ptr::copy(
+            data.as_ptr().add(old_field_end),
+            data.as_mut_ptr().add(new_field_end),
+            tail_len,
+        );
+    }
+
+    // Write new name
+    data[DYN_HEADER_SIZE..new_field_end].copy_from_slice(new_name);
+
+    // Update name_len descriptor
+    let zc = unsafe { &mut *(data[DYN_DISC_LEN..].as_mut_ptr() as *mut DynTestZc) };
+    zc.name_len = PodU16::from(5u16);
+
+    // Verify: name is "hello", tags are preserved
+    let name_str =
+        unsafe { core::str::from_utf8_unchecked(&data[DYN_HEADER_SIZE..DYN_HEADER_SIZE + 5]) };
+    assert_eq!(name_str, "hello");
+
+    let tags_offset = DYN_HEADER_SIZE + 5;
+    let tag: &[u8; 32] = data[tags_offset..tags_offset + 32].try_into().unwrap();
+    assert_eq!(tag, &[0xBB; 32]);
+}
+
+#[test]
+fn dynamic_memmove_shrink_field() {
+    // Simulate set_name() shrinking the name field.
+    // Initial: name="hello" (5 bytes), tags=[[0xCC;32]] (32 bytes)
+    // After:   name="hi" (2 bytes), tags shift backward by 3
+    let name = b"hello";
+    let tags = [[0xCC; 32]];
+    let mut buf = make_dyn_buffer(name, &tags);
+    let view = unsafe { buf.view() };
+
+    let data = unsafe { view.borrow_unchecked_mut() };
+
+    let old_field_end = DYN_HEADER_SIZE + 5;
+    let new_field_end = DYN_HEADER_SIZE + 2;
+    let tail_len = 32;
+
+    // Shift tail backward (shrink — memmove handles overlap)
+    unsafe {
+        core::ptr::copy(
+            data.as_ptr().add(old_field_end),
+            data.as_mut_ptr().add(new_field_end),
+            tail_len,
+        );
+    }
+
+    // Write new name
+    data[DYN_HEADER_SIZE..new_field_end].copy_from_slice(b"hi");
+
+    // Update descriptor
+    let zc = unsafe { &mut *(data[DYN_DISC_LEN..].as_mut_ptr() as *mut DynTestZc) };
+    zc.name_len = PodU16::from(2u16);
+
+    // Shrink account
+    let new_total = DYN_HEADER_SIZE + 2 + 32;
+    view.resize(new_total).unwrap();
+
+    // Verify
+    let data = unsafe { view.borrow_unchecked() };
+    let name_str =
+        unsafe { core::str::from_utf8_unchecked(&data[DYN_HEADER_SIZE..DYN_HEADER_SIZE + 2]) };
+    assert_eq!(name_str, "hi");
+
+    let tags_offset = DYN_HEADER_SIZE + 2;
+    let tag: &[u8; 32] = data[tags_offset..tags_offset + 32].try_into().unwrap();
+    assert_eq!(tag, &[0xCC; 32]);
+}
+
+// ===========================================================================
+// 22. Dynamic fields — batch write (set_dynamic_fields pattern)
+//
+// set_dynamic_fields() builds new tail in a stack buffer, then copies it
+// back in one shot. Tests the stack buffer + copy_from_slice pattern.
+// ===========================================================================
+
+#[test]
+fn dynamic_batch_write_stack_buffer() {
+    // Simulate set_dynamic_fields(&payer, Some("bob"), None) where
+    // original data is name="alice" (5), tags=[[0xDD;32]] (32).
+    // Some("bob") → new name, None → preserve tags.
+    let name = b"alice";
+    let tags = [[0xDD; 32]];
+    let mut buf = make_dyn_buffer(name, &tags);
+    let view = unsafe { buf.view() };
+
+    // Read existing ZC header
+    let data = unsafe { view.borrow_unchecked() };
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+
+    // Stack buffer (MAX_TAIL = max_name + max_tags*32, e.g. 32 + 10*32 = 352)
+    const MAX_TAIL: usize = 32 + 10 * 32;
+    let mut stack_buf = [0u8; MAX_TAIL];
+    let mut buf_offset = 0usize;
+    let mut old_offset = DYN_HEADER_SIZE;
+
+    // Field 1: name — Some("bob")
+    let new_name = b"bob";
+    let old_name_len = zc.name_len.get() as usize;
+    let new_name_len = new_name.len();
+    stack_buf[buf_offset..buf_offset + new_name_len].copy_from_slice(new_name);
+    buf_offset += new_name_len;
+    old_offset += old_name_len;
+
+    // Field 2: tags — None (preserve existing)
+    let old_count = zc.tags_count.get() as usize;
+    let old_bytes = old_count * 32;
+    stack_buf[buf_offset..buf_offset + old_bytes]
+        .copy_from_slice(&data[old_offset..old_offset + old_bytes]);
+    buf_offset += old_bytes;
+    old_offset += old_bytes;
+    let _ = old_offset;
+
+    // Resize if needed
+    let new_total = DYN_HEADER_SIZE + buf_offset;
+    let old_total = data.len();
+    if new_total > old_total {
+        view.resize(new_total).unwrap();
+    }
+
+    // Copy buffer back
+    let data = unsafe { view.borrow_unchecked_mut() };
+    let tail_start = DYN_HEADER_SIZE;
+    data[tail_start..tail_start + buf_offset].copy_from_slice(&stack_buf[..buf_offset]);
+
+    // Update descriptors
+    let zc = unsafe { &mut *(data[DYN_DISC_LEN..].as_mut_ptr() as *mut DynTestZc) };
+    zc.name_len = PodU16::from(new_name_len as u16);
+    // tags_count unchanged
+
+    // Shrink if needed
+    if new_total < old_total {
+        view.resize(new_total).unwrap();
+    }
+
+    // Verify
+    let data = unsafe { view.borrow_unchecked() };
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+    let mut offset = DYN_HEADER_SIZE;
+
+    let name_len = zc.name_len.get() as usize;
+    let s = unsafe { core::str::from_utf8_unchecked(&data[offset..offset + name_len]) };
+    assert_eq!(s, "bob");
+    offset += name_len;
+
+    let count = zc.tags_count.get() as usize;
+    let slice: &[Address] =
+        unsafe { core::slice::from_raw_parts(data[offset..].as_ptr() as *const Address, count) };
+    assert_eq!(slice.len(), 1);
+    assert_eq!(slice[0].as_array(), &[0xDD; 32]);
+}
+
+#[test]
+fn dynamic_batch_write_all_some() {
+    // set_dynamic_fields(&payer, Some("x"), Some(&[addr1])) — update all fields.
+    let name = b"hello world";
+    let tags = [[0xAA; 32], [0xBB; 32]];
+    let mut buf = make_dyn_buffer(name, &tags);
+    let view = unsafe { buf.view() };
+
+    const MAX_TAIL: usize = 32 + 10 * 32;
+    let mut stack_buf = [0u8; MAX_TAIL];
+    let mut buf_offset = 0usize;
+
+    // Name: Some("x")
+    let new_name = b"x";
+    stack_buf[buf_offset..buf_offset + 1].copy_from_slice(new_name);
+    buf_offset += 1;
+
+    // Tags: Some(&[new_tag])
+    let new_tag = [0xFF; 32];
+    stack_buf[buf_offset..buf_offset + 32].copy_from_slice(&new_tag);
+    buf_offset += 32;
+
+    let new_total = DYN_HEADER_SIZE + buf_offset;
+    let old_total = view.data_len();
+
+    if new_total > old_total {
+        view.resize(new_total).unwrap();
+    }
+
+    let data = unsafe { view.borrow_unchecked_mut() };
+    data[DYN_HEADER_SIZE..DYN_HEADER_SIZE + buf_offset]
+        .copy_from_slice(&stack_buf[..buf_offset]);
+
+    let zc = unsafe { &mut *(data[DYN_DISC_LEN..].as_mut_ptr() as *mut DynTestZc) };
+    zc.name_len = PodU16::from(1u16);
+    zc.tags_count = PodU16::from(1u16);
+
+    if new_total < old_total {
+        view.resize(new_total).unwrap();
+    }
+
+    // Verify
+    let data = unsafe { view.borrow_unchecked() };
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+    assert_eq!(zc.name_len.get(), 1);
+    assert_eq!(zc.tags_count.get(), 1);
+
+    let s = unsafe { core::str::from_utf8_unchecked(&data[DYN_HEADER_SIZE..DYN_HEADER_SIZE + 1]) };
+    assert_eq!(s, "x");
+
+    let tags_offset = DYN_HEADER_SIZE + 1;
+    let tag: &[u8; 32] = data[tags_offset..tags_offset + 32].try_into().unwrap();
+    assert_eq!(tag, &[0xFF; 32]);
+}
+
+// ===========================================================================
+// 23. Dynamic fields — Vec in-place mutation
+//
+// tags_mut() returns &mut [T] via slice::from_raw_parts_mut pointing into
+// account data. Writes through this slice go to the SVM buffer.
+// ===========================================================================
+
+#[test]
+fn dynamic_vec_in_place_mutation() {
+    let tags = [[0x11; 32], [0x22; 32]];
+    let mut buf = make_dyn_buffer(b"", &tags);
+    let view = unsafe { buf.view() };
+
+    // Simulate tags_mut():
+    //   borrow_unchecked_mut → cast ZC → compute offset → from_raw_parts_mut
+    let data = unsafe { view.borrow_unchecked_mut() };
+    let zc = unsafe { &*(data[DYN_DISC_LEN..].as_ptr() as *const DynTestZc) };
+    let name_len = zc.name_len.get() as usize;
+    let offset = DYN_HEADER_SIZE + name_len;
+    let count = zc.tags_count.get() as usize;
+
+    let slice: &mut [Address] = unsafe {
+        core::slice::from_raw_parts_mut(data[offset..].as_mut_ptr() as *mut Address, count)
+    };
+
+    // Mutate in place
+    slice[0] = Address::new_from_array([0xFF; 32]);
+
+    // Verify through a fresh read
+    let data = unsafe { view.borrow_unchecked() };
+    let tags_offset = DYN_HEADER_SIZE;
+    let tag: &[u8; 32] = data[tags_offset..tags_offset + 32].try_into().unwrap();
+    assert_eq!(tag, &[0xFF; 32]);
+    // Second element unchanged
+    let tag2: &[u8; 32] = data[tags_offset + 32..tags_offset + 64].try_into().unwrap();
+    assert_eq!(tag2, &[0x22; 32]);
+}
+
+// ===========================================================================
+// 24. Dynamic fields — copy_nonoverlapping for Vec data writes
+//
+// set_tags() uses ptr::copy_nonoverlapping to copy new Vec data into
+// account data. Source (caller's slice) and dest (account buffer) must
+// not overlap.
+// ===========================================================================
+
+#[test]
+fn dynamic_vec_write_copy_nonoverlapping() {
+    let mut buf = make_dyn_buffer(b"", &[]);
+    let view = unsafe { buf.view() };
+
+    // Grow account to fit 2 tags
+    let new_total = DYN_HEADER_SIZE + 64;
+    view.resize(new_total).unwrap();
+
+    let new_tags = [
+        Address::new_from_array([0xAA; 32]),
+        Address::new_from_array([0xBB; 32]),
+    ];
+
+    let data = unsafe { view.borrow_unchecked_mut() };
+    let offset = DYN_HEADER_SIZE;
+
+    // Simulate: copy_nonoverlapping(value.as_ptr() as *const u8, data[offset..].as_mut_ptr(), bytes)
+    let bytes = new_tags.len() * size_of::<Address>();
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            new_tags.as_ptr() as *const u8,
+            data[offset..].as_mut_ptr(),
+            bytes,
+        );
+    }
+
+    // Update descriptor
+    let zc = unsafe { &mut *(data[DYN_DISC_LEN..].as_mut_ptr() as *mut DynTestZc) };
+    zc.tags_count = PodU16::from(2u16);
+
+    // Verify
+    let data = unsafe { view.borrow_unchecked() };
+    let slice: &[Address] =
+        unsafe { core::slice::from_raw_parts(data[offset..].as_ptr() as *const Address, 2) };
+    assert_eq!(slice[0].as_array(), &[0xAA; 32]);
+    assert_eq!(slice[1].as_array(), &[0xBB; 32]);
+}
+
+// ===========================================================================
+// 25. Instruction data — ZC header cast + variable tail parsing
+//
+// #[instruction] with dynamic args generates:
+//   1. ZC struct with PodU16 descriptors for dynamic fields
+//   2. Cast instruction data to ZC struct
+//   3. Parse variable tail: from_utf8 for strings, from_raw_parts for vecs
+// ===========================================================================
+
+/// Simulated instruction data ZC struct for: fn create(name: String<32>, score: u64)
+/// Fixed: score as PodU64 (8 bytes)
+/// Dynamic: name_len as PodU16 (2 bytes)
+/// Tail: name bytes
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct IxDataZc {
+    score: PodU64,
+    name_len: PodU16,
+}
+
+const _: () = assert!(align_of::<IxDataZc>() == 1);
+
+#[test]
+fn instruction_dynamic_args_zc_cast() {
+    // Simulate the instruction data layout:
+    //   [discriminator: 1 byte][IxDataZc: 10 bytes][name: N bytes]
+    let disc: &[u8] = &[0x00];
+    let name = b"solana";
+    let score: u64 = 42;
+
+    let mut ix_data = Vec::new();
+    ix_data.extend_from_slice(disc);
+    ix_data.extend_from_slice(&score.to_le_bytes());
+    ix_data.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    ix_data.extend_from_slice(name);
+
+    // Skip discriminator
+    let after_disc = &ix_data[1..];
+
+    // Cast to ZC
+    assert!(after_disc.len() >= size_of::<IxDataZc>());
+    let zc = unsafe { &*(after_disc.as_ptr() as *const IxDataZc) };
+
+    assert_eq!(zc.score.get(), 42);
+    assert_eq!(zc.name_len.get(), 6);
+
+    // Parse variable tail
+    let tail = &after_disc[size_of::<IxDataZc>()..];
+    let dyn_len = zc.name_len.get() as usize;
+    assert!(tail.len() >= dyn_len);
+
+    // String: validated via from_utf8 (not unchecked — instruction data is untrusted)
+    let s = core::str::from_utf8(&tail[..dyn_len]).unwrap();
+    assert_eq!(s, "solana");
+}
+
+#[test]
+fn instruction_dynamic_vec_arg() {
+    // Instruction: fn batch(items: Vec<PodU64, 10>)
+    // Layout: [disc][items_count: PodU16][items: PodU64 * count]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct IxVecZc {
+        items_count: PodU16,
+    }
+    const _: () = assert!(align_of::<IxVecZc>() == 1);
+
+    let items = [1u64, 2, 3];
+    let mut ix_data = Vec::new();
+    ix_data.push(0x01); // disc
+    ix_data.extend_from_slice(&(items.len() as u16).to_le_bytes());
+    for &v in &items {
+        ix_data.extend_from_slice(&v.to_le_bytes());
+    }
+
+    let after_disc = &ix_data[1..];
+    let zc = unsafe { &*(after_disc.as_ptr() as *const IxVecZc) };
+    assert_eq!(zc.items_count.get(), 3);
+
+    let tail = &after_disc[size_of::<IxVecZc>()..];
+    let count = zc.items_count.get() as usize;
+    let byte_len = count * size_of::<PodU64>();
+    assert!(tail.len() >= byte_len);
+
+    let slice: &[PodU64] =
+        unsafe { core::slice::from_raw_parts(tail.as_ptr() as *const PodU64, count) };
+
+    assert_eq!(slice[0].get(), 1);
+    assert_eq!(slice[1].get(), 2);
+    assert_eq!(slice[2].get(), 3);
 }

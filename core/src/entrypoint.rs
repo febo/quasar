@@ -70,8 +70,10 @@ macro_rules! no_alloc {
 macro_rules! panic_handler {
     () => {
         #[cfg(any(target_os = "solana", target_arch = "bpf"))]
-        fn panic(_info: &core::panic::PanicInfo<'_>) {
-            solana_program_log::log("PANIC");
+        #[panic_handler]
+        fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
+            $crate::prelude::log("PANIC");
+            loop {}
         }
     };
 }

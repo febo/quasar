@@ -35,3 +35,4 @@ pub use quasar_derive::{account, emit_cpi, error_code, event, instruction, progr
 pub use solana_account_view::AccountView;
 pub use solana_address::{declare_id, Address};
 pub use solana_program_error::ProgramError;
+pub use solana_program_log::log;

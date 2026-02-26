@@ -1,9 +1,11 @@
 SHELL := /usr/bin/env bash
 NIGHTLY_TOOLCHAIN := nightly
 
-.PHONY: format \
-	clippy test check-features build all-checks nightly-version
+# Quasar example programs that produce SBF binaries
+SBF_EXAMPLES := examples/vault examples/escrow
 
+.PHONY: format format-fix clippy clippy-fix check-features \
+	build build-sbf test all-checks nightly-version
 
 # Print the nightly toolchain version for CI
 nightly-version:
@@ -27,9 +29,15 @@ check-features:
 build:
 	@cargo build
 
+build-sbf:
+	@for dir in $(SBF_EXAMPLES); do \
+		echo "Building $$dir"; \
+		cargo build-sbf --manifest-path "$$dir/Cargo.toml"; \
+	done
+
 test:
 	@$(MAKE) build
-	@cargo test --all-features
+	@cargo test -p quasar-core -p quasar-derive -p quasar-spl -p quasar-vault -p quasar-escrow --all-features
 
 # Run all checks in sequence
 all-checks:
@@ -37,5 +45,6 @@ all-checks:
 	@$(MAKE) format
 	@$(MAKE) clippy
 	@$(MAKE) check-features
+	@$(MAKE) build-sbf
 	@$(MAKE) test
 	@echo "All checks passed!"

@@ -50,7 +50,10 @@ pub(crate) fn account(attr: TokenStream, item: TokenStream) -> TokenStream {
             if let Some(max) = is_dynamic_string(&f.ty) {
                 DynKind::Str { max }
             } else if let Some((elem, max)) = is_dynamic_vec(&f.ty) {
-                DynKind::Vec { elem: Box::new(elem), max }
+                DynKind::Vec {
+                    elem: Box::new(elem),
+                    max,
+                }
             } else {
                 DynKind::Fixed
             }
@@ -60,7 +63,14 @@ pub(crate) fn account(attr: TokenStream, item: TokenStream) -> TokenStream {
     let has_dynamic = field_kinds.iter().any(|k| !matches!(k, DynKind::Fixed));
 
     if !has_dynamic {
-        return generate_fixed_account(name, disc_bytes, disc_len, &disc_indices, fields_data, &input);
+        return generate_fixed_account(
+            name,
+            disc_bytes,
+            disc_len,
+            &disc_indices,
+            fields_data,
+            &input,
+        );
     }
 
     // Validate: fixed fields must precede all dynamic fields

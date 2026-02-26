@@ -107,7 +107,10 @@ pub(crate) fn instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
                 if let Some(max) = is_ix_dynamic_string(&pt.ty) {
                     IxDynKind::Str { max }
                 } else if let Some((elem, max)) = is_ix_dynamic_vec(&pt.ty) {
-                    IxDynKind::Vec { elem: Box::new(elem), max }
+                    IxDynKind::Vec {
+                        elem: Box::new(elem),
+                        max,
+                    }
                 } else {
                     IxDynKind::Fixed
                 }
@@ -209,11 +212,9 @@ pub(crate) fn instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 return Err(ProgramError::InvalidInstructionData);
                             }
                         ));
-                        new_stmts.push(syn::parse_quote!(
-                            if __tail.len() < __offset + __dyn_len {
-                                return Err(ProgramError::InvalidInstructionData);
-                            }
-                        ));
+                        new_stmts.push(syn::parse_quote!(if __tail.len() < __offset + __dyn_len {
+                            return Err(ProgramError::InvalidInstructionData);
+                        }));
                         new_stmts.push(syn::parse_quote!(
                             let #name: &str = unsafe {
                                 core::str::from_utf8_unchecked(

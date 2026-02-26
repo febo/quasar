@@ -25,14 +25,6 @@ Both programs implement the same vault logic and run against the same test harne
 | Deposit     | 2,816  | 2,833                    | -17   |
 | Withdraw    | 1,618  | 1,635                    | -17   |
 
-Full escrow reference implementation:
-
-| Instruction | CU |
-|-------------|-----|
-| Make | 9,395 |
-| Take | 17,789 |
-| Refund | 11,930 |
-
 ## Quick Start
 
 ```rust

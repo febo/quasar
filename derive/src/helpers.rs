@@ -49,12 +49,13 @@ impl Parse for InstructionArgs {
 // --- Discriminator validation ---
 
 /// Parse discriminator `LitInt`s into byte values.
-pub(crate) fn parse_discriminator_bytes(disc_bytes: &[LitInt]) -> Vec<u8> {
+pub(crate) fn parse_discriminator_bytes(disc_bytes: &[LitInt]) -> syn::Result<Vec<u8>> {
     disc_bytes
         .iter()
         .map(|lit| {
-            lit.base10_parse::<u8>()
-                .expect("discriminator byte must be 0-255")
+            lit.base10_parse::<u8>().map_err(|_| {
+                syn::Error::new_spanned(lit, "discriminator byte must be 0-255")
+            })
         })
         .collect()
 }
@@ -63,7 +64,7 @@ pub(crate) fn parse_discriminator_bytes(disc_bytes: &[LitInt]) -> Vec<u8> {
 /// Rejects all-zero discriminators which are indistinguishable from
 /// uninitialized account data. Used for `#[account]` only (not instructions).
 pub(crate) fn validate_discriminator_not_zero(disc_bytes: &[LitInt]) -> syn::Result<Vec<u8>> {
-    let values = parse_discriminator_bytes(disc_bytes);
+    let values = parse_discriminator_bytes(disc_bytes)?;
     if values.iter().all(|&b| b == 0) {
         return Err(syn::Error::new_spanned(
             &disc_bytes[0],

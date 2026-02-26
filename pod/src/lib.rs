@@ -447,6 +447,27 @@ define_pod_signed!(PodI64, i64, 8);
 define_pod_signed!(PodI32, i32, 4);
 define_pod_signed!(PodI16, i16, 2);
 
+// Compile-time invariant: all Pod types must have alignment 1 and correct size.
+// These assertions guard against future changes that could break zero-copy access.
+const _: () = assert!(core::mem::align_of::<PodU128>() == 1);
+const _: () = assert!(core::mem::size_of::<PodU128>() == 16);
+const _: () = assert!(core::mem::align_of::<PodU64>() == 1);
+const _: () = assert!(core::mem::size_of::<PodU64>() == 8);
+const _: () = assert!(core::mem::align_of::<PodU32>() == 1);
+const _: () = assert!(core::mem::size_of::<PodU32>() == 4);
+const _: () = assert!(core::mem::align_of::<PodU16>() == 1);
+const _: () = assert!(core::mem::size_of::<PodU16>() == 2);
+const _: () = assert!(core::mem::align_of::<PodI128>() == 1);
+const _: () = assert!(core::mem::size_of::<PodI128>() == 16);
+const _: () = assert!(core::mem::align_of::<PodI64>() == 1);
+const _: () = assert!(core::mem::size_of::<PodI64>() == 8);
+const _: () = assert!(core::mem::align_of::<PodI32>() == 1);
+const _: () = assert!(core::mem::size_of::<PodI32>() == 4);
+const _: () = assert!(core::mem::align_of::<PodI16>() == 1);
+const _: () = assert!(core::mem::size_of::<PodI16>() == 2);
+const _: () = assert!(core::mem::align_of::<PodBool>() == 1);
+const _: () = assert!(core::mem::size_of::<PodBool>() == 1);
+
 #[repr(transparent)]
 #[derive(Copy, Clone, Default)]
 #[cfg_attr(feature = "wincode", derive(SchemaWrite, SchemaRead))]

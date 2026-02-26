@@ -1,7 +1,13 @@
 use quasar_core::cpi::system::SYSTEM_PROGRAM_ID;
 use quasar_core::prelude::*;
 
+use crate::constants::{SPL_TOKEN_ID, TOKEN_2022_ID};
 use crate::cpi::TokenCpi;
+
+#[inline(always)]
+fn is_token_program_owner(view: &AccountView) -> bool {
+    view.owned_by(&SPL_TOKEN_ID) || view.owned_by(&TOKEN_2022_ID)
+}
 use crate::interface::InterfaceMintAccount;
 use crate::interface::InterfaceTokenAccount;
 use crate::state::{MintAccountState, TokenAccountState};
@@ -75,6 +81,12 @@ pub trait InitToken: AsAccountView + Sized {
         if view.owned_by(&SYSTEM_PROGRAM_ID) {
             self.init(system_program, payer, token_program, mint, owner, rent)
         } else {
+            // Validate that the account is owned by a token program.
+            // Without this check, an attacker could pass an account owned by
+            // an arbitrary program with crafted data matching expected offsets.
+            if !is_token_program_owner(view) {
+                return Err(ProgramError::IllegalOwner);
+            }
             if view.data_len() < TokenAccountState::LEN {
                 return Err(ProgramError::InvalidAccountData);
             }
@@ -176,6 +188,9 @@ pub trait InitMint: AsAccountView + Sized {
                 rent,
             )
         } else {
+            if !is_token_program_owner(view) {
+                return Err(ProgramError::IllegalOwner);
+            }
             if view.data_len() < MintAccountState::LEN {
                 return Err(ProgramError::InvalidAccountData);
             }

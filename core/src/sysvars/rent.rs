@@ -1,4 +1,5 @@
 use crate::impl_sysvar_get;
+use crate::pod::PodU64;
 use {
     crate::sysvars::Sysvar,
     core::mem::{align_of, size_of},
@@ -21,29 +22,33 @@ pub const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
 // Intentionally 16 bytes: the full Rent sysvar is 17 bytes (includes
 // burn_percent: u8 at offset 16), but burn_percent is unused so we
 // only read the first 16 bytes via impl_sysvar_get with padding = 0.
+//
+// Uses PodU64 for lamports_per_byte to guarantee alignment 1, making
+// from_bytes_unchecked sound on all targets (not just SBF).
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct Rent {
-    lamports_per_byte: u64,
+    lamports_per_byte: PodU64,
     exemption_threshold: [u8; 8],
 }
 
 const _ASSERT_STRUCT_LEN: () = assert!(size_of::<Rent>() == 16);
-const _ASSERT_STRUCT_ALIGN: () = assert!(align_of::<Rent>() == 8);
+const _ASSERT_STRUCT_ALIGN: () = assert!(align_of::<Rent>() == 1);
 
 impl Rent {
     #[inline(always)]
     pub fn minimum_balance_unchecked(&self, data_len: usize) -> u64 {
         let bytes = data_len as u64;
+        let lamports_per_byte = self.lamports_per_byte.get();
 
         if self.exemption_threshold == SIMD0194_EXEMPTION_THRESHOLD {
-            (ACCOUNT_STORAGE_OVERHEAD + bytes) * self.lamports_per_byte
+            (ACCOUNT_STORAGE_OVERHEAD + bytes) * lamports_per_byte
         } else if self.exemption_threshold == CURRENT_EXEMPTION_THRESHOLD {
-            2 * (ACCOUNT_STORAGE_OVERHEAD + bytes) * self.lamports_per_byte
+            2 * (ACCOUNT_STORAGE_OVERHEAD + bytes) * lamports_per_byte
         } else {
             #[cfg(not(target_arch = "bpf"))]
             {
-                (((ACCOUNT_STORAGE_OVERHEAD + bytes) * self.lamports_per_byte) as f64
+                (((ACCOUNT_STORAGE_OVERHEAD + bytes) * lamports_per_byte) as f64
                     * f64::from_le_bytes(self.exemption_threshold)) as u64
             }
             #[cfg(target_arch = "bpf")]
@@ -58,11 +63,12 @@ impl Rent {
             return Err(ProgramError::InvalidArgument);
         }
 
-        if self.lamports_per_byte > CURRENT_MAX_LAMPORTS_PER_BYTE {
+        let lamports_per_byte = self.lamports_per_byte.get();
+        if lamports_per_byte > CURRENT_MAX_LAMPORTS_PER_BYTE {
             if self.exemption_threshold == CURRENT_EXEMPTION_THRESHOLD {
                 return Err(ProgramError::InvalidArgument);
             }
-        } else if self.lamports_per_byte > SIMD0194_MAX_LAMPORTS_PER_BYTE {
+        } else if lamports_per_byte > SIMD0194_MAX_LAMPORTS_PER_BYTE {
             if self.exemption_threshold == SIMD0194_EXEMPTION_THRESHOLD {
                 return Err(ProgramError::InvalidArgument);
             }

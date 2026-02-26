@@ -81,16 +81,24 @@ impl<'a> RemainingAccounts<'a> {
 }
 
 /// Walk-based dup resolution for one-off `get()` access.
+/// Uses iterative resolution with a depth limit to prevent stack overflow
+/// from malformed duplicate chains in the SVM input buffer.
 fn resolve_dup_walk(
     orig_idx: usize,
     declared: &[AccountView],
     start: *mut u8,
     boundary: *const u8,
 ) -> AccountView {
-    if orig_idx < declared.len() {
-        unsafe { core::ptr::read(declared.as_ptr().add(orig_idx)) }
-    } else {
-        let target = orig_idx - declared.len();
+    // Iterative resolution: follow duplicate chains up to 2 hops.
+    // The SVM guarantees duplicates resolve in one hop, but we allow
+    // a second for defense-in-depth without risking stack overflow.
+    let mut idx = orig_idx;
+    for _ in 0..2 {
+        if idx < declared.len() {
+            return unsafe { core::ptr::read(declared.as_ptr().add(idx)) };
+        }
+
+        let target = idx - declared.len();
         let mut ptr = start;
         for i in 0..=target {
             if ptr as *const u8 >= boundary {
@@ -100,11 +108,12 @@ fn resolve_dup_walk(
             let borrow = unsafe { (*raw).borrow_state };
 
             if i == target {
-                return if borrow == NOT_BORROWED {
-                    unsafe { AccountView::new_unchecked(raw) }
-                } else {
-                    resolve_dup_walk(borrow as usize, declared, start, boundary)
-                };
+                if borrow == NOT_BORROWED {
+                    return unsafe { AccountView::new_unchecked(raw) };
+                }
+                // Follow the chain iteratively instead of recursing
+                idx = borrow as usize;
+                break;
             }
 
             if borrow == NOT_BORROWED {
@@ -118,8 +127,8 @@ fn resolve_dup_walk(
                 }
             }
         }
-        unreachable!()
     }
+    unreachable!("duplicate chain exceeded maximum depth")
 }
 
 pub struct RemainingIter<'a> {
@@ -146,18 +155,17 @@ impl RemainingIter<'_> {
     /// O(1) dup resolution: declared accounts via slice, previously-yielded
     /// remaining accounts via the iterator's own cache.
     #[inline(always)]
-    fn resolve_dup(&self, orig_idx: usize) -> AccountView {
+    fn resolve_dup(&self, orig_idx: usize) -> Option<AccountView> {
         if orig_idx < self.declared.len() {
-            unsafe { core::ptr::read(self.declared.as_ptr().add(orig_idx)) }
+            Some(unsafe { core::ptr::read(self.declared.as_ptr().add(orig_idx)) })
         } else {
             let remaining_idx = orig_idx - self.declared.len();
-            // SAFETY: SVM duplicates always reference earlier accounts,
-            // so remaining_idx < self.index (already cached).
-            debug_assert!(
-                remaining_idx < self.index,
-                "forward-reference in remaining accounts"
-            );
-            unsafe { core::ptr::read(self.cache_ptr().add(remaining_idx)) }
+            // Hard bounds check: SVM duplicates always reference earlier accounts.
+            // A forward-reference would read uninitialized cache memory.
+            if remaining_idx >= self.index {
+                return None;
+            }
+            Some(unsafe { core::ptr::read(self.cache_ptr().add(remaining_idx)) })
         }
     }
 }
@@ -184,7 +192,7 @@ impl Iterator for RemainingIter<'_> {
             unsafe {
                 self.ptr = self.ptr.add(core::mem::size_of::<u64>());
             }
-            self.resolve_dup(borrow as usize)
+            self.resolve_dup(borrow as usize)?
         };
 
         // Cache for future dup resolution — same pattern as the entrypoint.

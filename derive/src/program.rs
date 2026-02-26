@@ -35,10 +35,17 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mod_name = module.ident.clone();
     let program_type_name = format_ident!("{}Program", snake_to_pascal(&mod_name.to_string()));
 
-    let (_, items) = module
-        .content
-        .as_ref()
-        .expect("#[program] must be used on a module with a body");
+    let (_, items) = match module.content.as_ref() {
+        Some(content) => content,
+        None => {
+            return syn::Error::new_spanned(
+                &module,
+                "#[program] must be used on a module with a body",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
 
     // Scan for #[instruction(discriminator = ...)] functions
     let mut dispatch_arms: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -50,9 +57,10 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Item::Fn(func) = item {
             for attr in &func.attrs {
                 if attr.path().is_ident("instruction") {
-                    let args: InstructionArgs = attr
-                        .parse_args()
-                        .expect("failed to parse #[instruction] attribute");
+                    let args: InstructionArgs = match attr.parse_args() {
+                        Ok(a) => a,
+                        Err(e) => return e.to_compile_error().into(),
+                    };
                     let disc_bytes = &args.discriminator;
                     let fn_name = &func.sig.ident;
                     let accounts_type = match extract_ctx_inner_type(&func.sig) {
@@ -77,7 +85,10 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
 
                     // Check for duplicates
-                    let disc_values = parse_discriminator_bytes(disc_bytes);
+                    let disc_values = match parse_discriminator_bytes(disc_bytes) {
+                        Ok(v) => v,
+                        Err(e) => return e.to_compile_error().into(),
+                    };
                     if let Some((_, prev_fn)) =
                         seen_discriminators.iter().find(|(v, _)| *v == disc_values)
                     {
@@ -251,7 +262,9 @@ pub(crate) fn program(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#client_items)*
             }
         })
-        .expect("failed to parse client module");
+        .unwrap_or_else(|e| {
+            syn::Item::Verbatim(e.to_compile_error())
+        });
         items.push(client_mod);
     }
 

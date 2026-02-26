@@ -1,6 +1,5 @@
-use crate::cpi::{InstructionAccount, Seed, Signer};
+use crate::cpi::{invoke_raw, InstructionAccount, RawCpiAccount, Seed, Signer};
 use solana_account_view::AccountView;
-use solana_instruction_view::InstructionView;
 use solana_program_error::ProgramError;
 
 #[inline(always)]
@@ -11,6 +10,7 @@ pub fn emit_event_cpi(
     bump: u8,
 ) -> Result<(), ProgramError> {
     let instruction_account = InstructionAccount::readonly_signer(event_authority.address());
+    let cpi_account = RawCpiAccount::from_view(event_authority);
 
     let bump_ref = [bump];
     let seeds = [
@@ -19,11 +19,23 @@ pub fn emit_event_cpi(
     ];
     let signer = Signer::from(&seeds as &[Seed]);
 
-    let instruction = InstructionView {
-        program_id: program.address(),
-        accounts: core::slice::from_ref(&instruction_account),
-        data: instruction_data,
+    // SAFETY: instruction_account and cpi_account are valid for the duration of the call.
+    // Pointers are derived from references with matching lifetimes.
+    let result = unsafe {
+        invoke_raw(
+            program.address(),
+            &instruction_account as *const InstructionAccount,
+            1,
+            instruction_data.as_ptr(),
+            instruction_data.len(),
+            &cpi_account as *const RawCpiAccount,
+            1,
+            &[signer],
+        )
     };
-
-    solana_instruction_view::cpi::invoke_signed::<1>(&instruction, &[event_authority], &[signer])
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(ProgramError::from(result))
+    }
 }

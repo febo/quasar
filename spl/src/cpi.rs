@@ -1,6 +1,18 @@
 use quasar_core::cpi::{CpiCall, InstructionAccount};
 use quasar_core::prelude::*;
 
+// SPL Token instruction opcodes
+const TRANSFER: u8 = 3;
+const APPROVE: u8 = 4;
+const REVOKE: u8 = 5;
+const MINT_TO: u8 = 7;
+const BURN: u8 = 8;
+const CLOSE_ACCOUNT: u8 = 9;
+const TRANSFER_CHECKED: u8 = 12;
+const SYNC_NATIVE: u8 = 17;
+const INITIALIZE_ACCOUNT3: u8 = 18;
+const INITIALIZE_MINT2: u8 = 20;
+
 /// Trait for types that can execute SPL Token CPI calls.
 ///
 /// Implemented by [`TokenProgram`], [`Token2022Program`], and [`TokenInterface`].
@@ -21,9 +33,14 @@ pub trait TokenCpi: AsAccountView {
         let authority = authority.to_account_view();
         let amount: u64 = amount.into();
 
-        let mut data = [0u8; 9];
-        data[0] = 3;
-        data[1..9].copy_from_slice(&amount.to_le_bytes());
+        // SAFETY: All 9 bytes are written before assume_init.
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 9]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, TRANSFER);
+            core::ptr::copy_nonoverlapping(amount.to_le_bytes().as_ptr(), ptr.add(1), 8);
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),
@@ -54,10 +71,15 @@ pub trait TokenCpi: AsAccountView {
         let authority = authority.to_account_view();
         let amount: u64 = amount.into();
 
-        let mut data = [0u8; 10];
-        data[0] = 12;
-        data[1..9].copy_from_slice(&amount.to_le_bytes());
-        data[9] = decimals;
+        // SAFETY: All 10 bytes are written before assume_init.
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 10]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, TRANSFER_CHECKED);
+            core::ptr::copy_nonoverlapping(amount.to_le_bytes().as_ptr(), ptr.add(1), 8);
+            core::ptr::write(ptr.add(9), decimals);
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),
@@ -86,9 +108,14 @@ pub trait TokenCpi: AsAccountView {
         let authority = authority.to_account_view();
         let amount: u64 = amount.into();
 
-        let mut data = [0u8; 9];
-        data[0] = 7;
-        data[1..9].copy_from_slice(&amount.to_le_bytes());
+        // SAFETY: All 9 bytes are written before assume_init.
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 9]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, MINT_TO);
+            core::ptr::copy_nonoverlapping(amount.to_le_bytes().as_ptr(), ptr.add(1), 8);
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),
@@ -116,9 +143,14 @@ pub trait TokenCpi: AsAccountView {
         let authority = authority.to_account_view();
         let amount: u64 = amount.into();
 
-        let mut data = [0u8; 9];
-        data[0] = 8;
-        data[1..9].copy_from_slice(&amount.to_le_bytes());
+        // SAFETY: All 9 bytes are written before assume_init.
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 9]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, BURN);
+            core::ptr::copy_nonoverlapping(amount.to_le_bytes().as_ptr(), ptr.add(1), 8);
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),
@@ -146,9 +178,14 @@ pub trait TokenCpi: AsAccountView {
         let authority = authority.to_account_view();
         let amount: u64 = amount.into();
 
-        let mut data = [0u8; 9];
-        data[0] = 4;
-        data[1..9].copy_from_slice(&amount.to_le_bytes());
+        // SAFETY: All 9 bytes are written before assume_init.
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 9]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, APPROVE);
+            core::ptr::copy_nonoverlapping(amount.to_le_bytes().as_ptr(), ptr.add(1), 8);
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),
@@ -182,7 +219,7 @@ pub trait TokenCpi: AsAccountView {
                 InstructionAccount::readonly_signer(authority.address()),
             ],
             [account, destination, authority],
-            [9],
+            [CLOSE_ACCOUNT],
         )
     }
 
@@ -203,7 +240,7 @@ pub trait TokenCpi: AsAccountView {
                 InstructionAccount::readonly_signer(authority.address()),
             ],
             [source, authority],
-            [5],
+            [REVOKE],
         )
     }
 
@@ -216,7 +253,7 @@ pub trait TokenCpi: AsAccountView {
             self.address(),
             [InstructionAccount::writable(token_account.address())],
             [token_account],
-            [17],
+            [SYNC_NATIVE],
         )
     }
 
@@ -235,9 +272,14 @@ pub trait TokenCpi: AsAccountView {
         let account = account.to_account_view();
         let mint = mint.to_account_view();
 
-        let mut data = [0u8; 33];
-        data[0] = 18;
-        data[1..33].copy_from_slice(owner.as_ref());
+        // SAFETY: All 33 bytes are written before assume_init.
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 33]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, INITIALIZE_ACCOUNT3);
+            core::ptr::copy_nonoverlapping(owner.as_ref().as_ptr(), ptr.add(1), 32);
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),
@@ -265,19 +307,25 @@ pub trait TokenCpi: AsAccountView {
     ) -> CpiCall<'a, 1, 67> {
         let mint = mint.to_account_view();
 
-        let mut data = [0u8; 67];
-        data[0] = 20;
-        data[1] = decimals;
-        data[2..34].copy_from_slice(mint_authority.as_ref());
-        match freeze_authority {
-            Some(fa) => {
-                data[34] = 1;
-                data[35..67].copy_from_slice(fa.as_ref());
+        // SAFETY: All 67 bytes are written before assume_init. The None branch
+        // explicitly zeroes bytes 34..67 (COption::None tag + 32 padding bytes).
+        let data = unsafe {
+            let mut buf = core::mem::MaybeUninit::<[u8; 67]>::uninit();
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            core::ptr::write(ptr, INITIALIZE_MINT2);
+            core::ptr::write(ptr.add(1), decimals);
+            core::ptr::copy_nonoverlapping(mint_authority.as_ref().as_ptr(), ptr.add(2), 32);
+            match freeze_authority {
+                Some(fa) => {
+                    core::ptr::write(ptr.add(34), 1u8);
+                    core::ptr::copy_nonoverlapping(fa.as_ref().as_ptr(), ptr.add(35), 32);
+                }
+                None => {
+                    core::ptr::write_bytes(ptr.add(34), 0, 33);
+                }
             }
-            None => {
-                // data[34] already 0 (COption::None), rest stays zero
-            }
-        }
+            buf.assume_init()
+        };
 
         CpiCall::new(
             self.address(),

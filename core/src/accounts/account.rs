@@ -115,8 +115,11 @@ impl<T: Owner> Account<T> {
         &T::OWNER
     }
 
-    /// Close a program-owned account: drain lamports, reassign to system program,
-    /// and resize to zero.
+    /// Close a program-owned account: zero discriminator, drain lamports,
+    /// reassign to system program, and resize to zero.
+    ///
+    /// Zeroes the discriminator bytes before draining to prevent account revival
+    /// attacks within the same transaction.
     ///
     /// Only works for accounts owned by the calling program (i.e. types
     /// implementing [`Owner`]). For token/mint accounts owned by the SPL Token
@@ -124,6 +127,17 @@ impl<T: Owner> Account<T> {
     #[inline(always)]
     pub fn close(&self, destination: &AccountView) -> Result<(), ProgramError> {
         let view = self.to_account_view();
+
+        // Zero discriminator bytes to prevent revival within the same transaction.
+        // SAFETY: data_ptr() is valid for data_len() bytes. We only write up to
+        // 8 bytes (max discriminator size) or data_len, whichever is smaller.
+        let zero_len = view.data_len().min(8);
+        if zero_len > 0 {
+            unsafe {
+                core::ptr::write_bytes(view.data_ptr(), 0, zero_len);
+            }
+        }
+
         destination.set_lamports(destination.lamports() + view.lamports());
         view.set_lamports(0);
         unsafe { view.assign(&SYSTEM_PROGRAM_ID) };

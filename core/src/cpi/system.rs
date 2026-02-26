@@ -49,9 +49,14 @@ pub fn transfer<'a>(
     lamports: impl Into<u64>,
 ) -> CpiCall<'a, 2, 12> {
     let lamports: u64 = lamports.into();
-    let mut data = [0u8; 12];
-    data[0] = 2;
-    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    // SAFETY: All 12 bytes are written before assume_init.
+    let data = unsafe {
+        let mut buf = core::mem::MaybeUninit::<[u8; 12]>::uninit();
+        let ptr = buf.as_mut_ptr() as *mut u8;
+        core::ptr::copy_nonoverlapping(2u32.to_le_bytes().as_ptr(), ptr, 4);
+        core::ptr::copy_nonoverlapping(lamports.to_le_bytes().as_ptr(), ptr.add(4), 8);
+        buf.assume_init()
+    };
 
     CpiCall::new(
         &SYSTEM_PROGRAM_ID,
@@ -66,9 +71,14 @@ pub fn transfer<'a>(
 
 #[inline(always)]
 pub fn assign<'a>(account: &'a AccountView, owner: &'a Address) -> CpiCall<'a, 1, 36> {
-    let mut data = [0u8; 36];
-    data[0] = 1;
-    data[4..36].copy_from_slice(owner.as_ref());
+    // SAFETY: All 36 bytes are written before assume_init.
+    let data = unsafe {
+        let mut buf = core::mem::MaybeUninit::<[u8; 36]>::uninit();
+        let ptr = buf.as_mut_ptr() as *mut u8;
+        core::ptr::copy_nonoverlapping(1u32.to_le_bytes().as_ptr(), ptr, 4);
+        core::ptr::copy_nonoverlapping(owner.as_ref().as_ptr(), ptr.add(4), 32);
+        buf.assume_init()
+    };
 
     CpiCall::new(
         &SYSTEM_PROGRAM_ID,

@@ -95,6 +95,9 @@ pub(super) fn generate_fixed_account(
         impl QuasarAccount for #name {
             #[inline(always)]
             fn deserialize(data: &[u8]) -> Result<Self, ProgramError> {
+                if data.len() < core::mem::size_of::<#zc_name>() {
+                    return Err(ProgramError::AccountDataTooSmall);
+                }
                 let __zc = unsafe { &*(data.as_ptr() as *const #zc_name) };
                 Ok(Self {
                     #(#deserialize_fields,)*
@@ -103,6 +106,9 @@ pub(super) fn generate_fixed_account(
 
             #[inline(always)]
             fn serialize(&self, data: &mut [u8]) -> Result<(), ProgramError> {
+                if data.len() < core::mem::size_of::<#zc_name>() {
+                    return Err(ProgramError::AccountDataTooSmall);
+                }
                 let __zc = unsafe { &mut *(data.as_mut_ptr() as *mut #zc_name) };
                 #(#serialize_stmts)*
                 Ok(())

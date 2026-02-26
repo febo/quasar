@@ -32,26 +32,22 @@ impl<'a> RawCpiAccount<'a> {
     #[inline(always)]
     pub(crate) fn from_view(view: &'a AccountView) -> Self {
         let raw = view.account_ptr();
+        // SAFETY: raw is a valid pointer to RuntimeAccount from the SVM input buffer.
+        // All fields are read through their pub accessors on RuntimeAccount.
         unsafe {
-            let mut account = RawCpiAccount {
+            RawCpiAccount {
                 address: &(*raw).address,
                 lamports: &(*raw).lamports,
                 data_len: (*raw).data_len,
                 data: (raw as *const u8).add(core::mem::size_of::<RuntimeAccount>()),
                 owner: &(*raw).owner,
                 rent_epoch: 0,
-                is_signer: 0,
-                is_writable: 0,
-                executable: 0,
+                is_signer: (*raw).is_signer,
+                is_writable: (*raw).is_writable,
+                executable: (*raw).executable,
                 _pad: [0u8; 5],
                 _lifetime: PhantomData,
-            };
-            core::ptr::copy_nonoverlapping(
-                (raw as *const u8).add(1),
-                &mut account.is_signer as *mut u8,
-                3,
-            );
-            account
+            }
         }
     }
 }
@@ -122,16 +118,7 @@ impl<'a, const ACCTS: usize, const DATA: usize> CpiCall<'a, ACCTS, DATA> {
         views: [&'a AccountView; ACCTS],
         data: [u8; DATA],
     ) -> Self {
-        let cpi_accounts = {
-            let mut arr = core::mem::MaybeUninit::<[RawCpiAccount<'a>; ACCTS]>::uninit();
-            let ptr = arr.as_mut_ptr() as *mut RawCpiAccount<'a>;
-            let mut i = 0;
-            while i < ACCTS {
-                unsafe { core::ptr::write(ptr.add(i), RawCpiAccount::from_view(views[i])) };
-                i += 1;
-            }
-            unsafe { arr.assume_init() }
-        };
+        let cpi_accounts = views.map(RawCpiAccount::from_view);
         Self {
             program_id,
             accounts,

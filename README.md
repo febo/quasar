@@ -11,11 +11,6 @@
 
 Quasar is a `no_std` Solana program framework. Accounts are pointer-cast directly from the SVM input buffer — no deserialization, no heap allocation, no copies. You write `#[program]`, `#[account]`, and `#[derive(Accounts)]` like Anchor, but the generated code compiles down to near-hand-written CU efficiency.
 
-| Instruction | Quasar | Pinocchio (hand-written) | Delta |
-|-------------|--------|--------------------------|-------|
-| Deposit     | 2,816  | 2,833                    | -17   |
-| Withdraw    | 1,618  | 1,635                    | -17   |
-
 ## Quick Start
 
 ```bash

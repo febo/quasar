@@ -35,7 +35,7 @@ pub enum Command {
     /// Scaffold a new Quasar project
     Init(InitCommand),
     /// Add instructions, state, and errors to the project
-    Template(TemplateCommand),
+    Add(AddCommand),
     /// Compile the on-chain program
     Build(BuildCommand),
     /// Run the test suite
@@ -89,31 +89,18 @@ pub struct InitCommand {
 }
 
 #[derive(Args, Debug)]
-pub struct TemplateCommand {
-    #[command(subcommand)]
-    pub what: TemplateAction,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum TemplateAction {
+pub struct AddCommand {
     /// Add a new instruction handler
-    #[command(name = "add-instruction")]
-    AddInstruction {
-        #[arg(value_name = "NAME")]
-        name: String,
-    },
+    #[arg(short, long, value_name = "NAME")]
+    pub instruction: Option<String>,
+
     /// Add a new state account
-    #[command(name = "add-state")]
-    AddState {
-        #[arg(value_name = "NAME")]
-        name: String,
-    },
+    #[arg(short, long, value_name = "NAME")]
+    pub state: Option<String>,
+
     /// Add a new error enum
-    #[command(name = "add-error")]
-    AddError {
-        #[arg(value_name = "NAME")]
-        name: String,
-    },
+    #[arg(short, long, value_name = "NAME")]
+    pub error: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -259,11 +246,25 @@ pub fn run(cli: Cli) -> CliResult {
             cmd.template,
             cmd.toolchain,
         ),
-        Command::Template(cmd) => match cmd.what {
-            TemplateAction::AddInstruction { name } => new::run_instruction(&name),
-            TemplateAction::AddState { name } => new::run_state(&name),
-            TemplateAction::AddError { name } => new::run_error(&name),
-        },
+        Command::Add(cmd) => {
+            if cmd.instruction.is_none() && cmd.state.is_none() && cmd.error.is_none() {
+                eprintln!(
+                    "  {}",
+                    style::fail("specify at least one of -i/--instruction, -s/--state, or -e/--error")
+                );
+                std::process::exit(1);
+            }
+            if let Some(name) = cmd.instruction {
+                new::run_instruction(&name)?;
+            }
+            if let Some(name) = cmd.state {
+                new::run_state(&name)?;
+            }
+            if let Some(name) = cmd.error {
+                new::run_error(&name)?;
+            }
+            Ok(())
+        }
         Command::Build(cmd) => build::run(cmd.debug, cmd.watch, cmd.features),
         Command::Test(cmd) => test::run(cmd.debug, cmd.filter, cmd.watch, cmd.no_build),
         Command::Deploy(cmd) => deploy::run(cmd.program_keypair, cmd.upgrade_authority),
@@ -331,11 +332,9 @@ pub fn print_help() {
     println!("  {}", style::bold("Commands:"));
     print_cmd("init   [name] [-y] [--no-git]", "Scaffold a new project");
     print_cmd(
-        "template add-instruction <name>",
-        "Add a new instruction",
+        "add    [-i name] [-s name] [-e name]",
+        "Add instructions, state, errors",
     );
-    print_cmd("template add-state <name>", "Add a new state account");
-    print_cmd("template add-error <name>", "Add a new error enum");
     print_cmd(
         "build  [--debug] [--watch] [--features]",
         "Compile the on-chain program",

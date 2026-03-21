@@ -1,5 +1,3 @@
-extern crate std;
-
 use {
     crate::idl_client::{
         CreateInstruction, DepositInstruction, ExecuteTransferInstruction, SetLabelInstruction,
@@ -139,9 +137,9 @@ fn test_create() {
     ]);
     assert_eq!(signers_count, 3, "signers count should be 3");
 
-    std::println!("\n========================================");
-    std::println!("  CREATE CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  CREATE CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -201,9 +199,9 @@ fn test_deposit() {
     let vault_after = result.resulting_accounts[2].1.lamports;
     assert_eq!(vault_after, deposit_amount, "vault lamports after deposit");
 
-    std::println!("\n========================================");
-    std::println!("  DEPOSIT CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  DEPOSIT CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -268,9 +266,9 @@ fn test_set_label() {
         .expect("invalid UTF-8");
     assert_eq!(stored_label, label, "label content mismatch");
 
-    std::println!("\n========================================");
-    std::println!("  SET_LABEL CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  SET_LABEL CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -354,9 +352,9 @@ fn test_execute_transfer() {
         "recipient lamports after transfer"
     );
 
-    std::println!("\n========================================");
-    std::println!("  EXECUTE_TRANSFER CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  EXECUTE_TRANSFER CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -419,9 +417,9 @@ fn test_execute_transfer_insufficient_signers() {
         "should fail with insufficient signers"
     );
 
-    std::println!("\n========================================");
-    std::println!("  INSUFFICIENT_SIGNERS: correctly rejected");
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  INSUFFICIENT_SIGNERS: correctly rejected");
+    println!("========================================\n");
 }
 
 #[test]

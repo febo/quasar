@@ -1,5 +1,3 @@
-extern crate std;
-
 use {
     crate::idl_client::{MakeInstruction, RefundInstruction, TakeInstruction},
     alloc::{vec, vec::Vec},
@@ -180,9 +178,9 @@ fn test_make_cu() {
     assert_eq!(&escrow_data[129..137], &1337u64.to_le_bytes(), "receive");
     assert_eq!(escrow_data[137], escrow_bump, "bump");
 
-    std::println!("\n========================================");
-    std::println!("  MAKE CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  MAKE CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -299,9 +297,9 @@ fn test_take_cu() {
         "take failed: {:?}",
         result.program_result
     );
-    std::println!("\n========================================");
-    std::println!("  TAKE CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  TAKE CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -387,9 +385,9 @@ fn test_refund_cu() {
         "refund failed: {:?}",
         result.program_result
     );
-    std::println!("\n========================================");
-    std::println!("  REFUND CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  REFUND CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +493,7 @@ fn test_make_existing_token_accounts() {
         "make with existing token accounts failed: {:?}",
         result.program_result
     );
-    std::println!(
+    println!(
         "  make with existing token accounts: OK (CU: {})",
         result.compute_units_consumed
     );
@@ -600,7 +598,7 @@ fn test_make_existing_maker_ta_b_wrong_mint() {
         result.program_result.is_err(),
         "make should fail with wrong mint on maker_ta_b"
     );
-    std::println!("  make with wrong mint rejected: OK");
+    println!("  make with wrong mint rejected: OK");
 }
 
 #[test]
@@ -702,7 +700,7 @@ fn test_make_existing_maker_ta_b_wrong_owner() {
         result.program_result.is_err(),
         "make should fail with wrong owner on maker_ta_b"
     );
-    std::println!("  make with wrong owner rejected: OK");
+    println!("  make with wrong owner rejected: OK");
 }
 
 #[test]
@@ -826,7 +824,7 @@ fn test_take_existing_token_accounts() {
         "take with existing token accounts failed: {:?}",
         result.program_result
     );
-    std::println!(
+    println!(
         "  take with existing token accounts: OK (CU: {})",
         result.compute_units_consumed
     );
@@ -917,7 +915,7 @@ fn test_refund_existing_maker_ta_a() {
         "refund with existing maker_ta_a failed: {:?}",
         result.program_result
     );
-    std::println!(
+    println!(
         "  refund with existing maker_ta_a: OK (CU: {})",
         result.compute_units_consumed
     );

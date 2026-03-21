@@ -1,5 +1,3 @@
-extern crate std;
-
 use {
     mollusk_svm::{program::keyed_account_for_system_program, Mollusk},
     solana_account::Account,
@@ -83,9 +81,9 @@ fn test_deposit() {
     assert_eq!(user_after, 10_000_000_000 - deposit_amount);
     assert_eq!(vault_after, deposit_amount);
 
-    std::println!("\n========================================");
-    std::println!("  DEPOSIT CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  DEPOSIT CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -147,7 +145,7 @@ fn test_withdraw() {
     assert_eq!(user_final, user_after_deposit.lamports + withdraw_amount);
     assert_eq!(vault_final, deposit_amount - withdraw_amount);
 
-    std::println!("\n========================================");
-    std::println!("  WITHDRAW CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  WITHDRAW CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }

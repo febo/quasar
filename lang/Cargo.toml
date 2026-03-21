@@ -15,8 +15,8 @@ alloc = []
 debug = []
 
 [dependencies]
-quasar-derive = { version = "0.0.0", path = "../derive" }
-quasar-pod = { version = "0.0.0", path = "../pod" }
+quasar-derive = { version = "0.0", path = "../derive" }
+quasar-pod = { version = "0.0", path = "../pod" }
 const-crypto = "0.3.0"
 solana-program-error = "3.0.0"
 solana-account-view = "2.0.0"

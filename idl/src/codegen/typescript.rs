@@ -53,7 +53,7 @@ fn generate_ts(idl: &Idl, target: TsTarget) -> String {
                 out.push_str("import { Buffer } from \"buffer\";\n");
             }
             out.push_str(
-                "import { PublicKey as Address, TransactionInstruction } from \
+                "import { Address, TransactionInstruction } from \
                  \"@solana/web3.js\";\n",
             );
         }

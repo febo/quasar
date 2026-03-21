@@ -1,5 +1,3 @@
-extern crate std;
-
 use {
     crate::idl_client::{DepositInstruction, WithdrawInstruction},
     mollusk_svm::{program::keyed_account_for_system_program, Mollusk},
@@ -60,9 +58,9 @@ fn test_deposit() {
     );
     assert_eq!(vault_after, deposit_amount, "vault lamports after deposit");
 
-    std::println!("\n========================================");
-    std::println!("  DEPOSIT CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  DEPOSIT CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }
 
 #[test]
@@ -144,7 +142,7 @@ fn test_withdraw() {
         "vault lamports after withdraw"
     );
 
-    std::println!("\n========================================");
-    std::println!("  WITHDRAW CU: {}", result.compute_units_consumed);
-    std::println!("========================================\n");
+    println!("\n========================================");
+    println!("  WITHDRAW CU: {}", result.compute_units_consumed);
+    println!("========================================\n");
 }

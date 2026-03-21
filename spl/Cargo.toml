@@ -11,7 +11,7 @@ authors.workspace = true
 metadata = []
 
 [dependencies]
-quasar-lang = { version = "0.0.0", path = "../lang" }
+quasar-lang = { version = "0.0", path = "../lang" }
 solana-address = { version = "2.2.0", features = ["copy"] }
 
 [dev-dependencies]

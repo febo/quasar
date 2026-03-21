@@ -776,7 +776,7 @@ client = []
 debug = []
 
 [dependencies]
-quasar-lang = {{ git = "https://github.com/blueshift-gg/quasar" }}
+quasar-lang = "0.0"
 "#,
     );
 
@@ -1027,9 +1027,7 @@ fn generate_tests_rs(
     match (framework, template) {
         (Framework::Mollusk, Template::Minimal | Template::Full) => {
             format!(
-                r#"extern crate std;
-
-use mollusk_svm::{{program::keyed_account_for_system_program, Mollusk}};
+                r#"use mollusk_svm::{{program::keyed_account_for_system_program, Mollusk}};
 use solana_account::Account;
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -1073,9 +1071,7 @@ fn test_initialize() {{
         }
         (Framework::QuasarSVMRust, Template::Minimal | Template::Full) => {
             format!(
-                r#"extern crate std;
-
-use quasar_svm::{{Account, Instruction, Pubkey, QuasarSvm}};
+                r#"use quasar_svm::{{Account, Instruction, Pubkey, QuasarSvm}};
 use solana_address::Address;
 
 use {client_crate}::InitializeInstruction;
@@ -1114,9 +1110,7 @@ fn test_initialize() {{
 "#
             )
         }
-        _ => r#"extern crate std;
-
-#[test]
+        _ => r#"#[test]
 fn test_initialize() {
     // TODO: implement test
 }

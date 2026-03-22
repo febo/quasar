@@ -54,7 +54,8 @@ fn unknown_key(key: &str) -> ! {
     eprintln!("  {}", style::fail(&format!("unknown config key: {key}")));
     eprintln!();
     eprintln!("  Available keys:");
-    eprintln!("    defaults.toolchain, defaults.framework, defaults.template, defaults.git");
+    eprintln!("    defaults.toolchain, defaults.test_language, defaults.rust_framework,");
+    eprintln!("    defaults.ts_sdk, defaults.template, defaults.git");
     eprintln!("    ui.animation, ui.color");
     std::process::exit(1);
 }

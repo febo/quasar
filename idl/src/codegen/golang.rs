@@ -194,9 +194,9 @@ pub fn generate_go_client(idl: &Idl) -> String {
                         }
                     }
                 }
-                // PDA derivation inline — we use MustFindProgramAddress pattern
+                // PDA derivation inline — panic on error (invalid seeds = programmer error)
                 format!(
-                    "func() solana.PublicKey {{ addr, _, _ := solana.FindProgramAddress([][]byte{{{}}}, ProgramID); return addr }}()",
+                    "func() solana.PublicKey {{ addr, _, err := solana.FindProgramAddress([][]byte{{{}}}, ProgramID); if err != nil {{ panic(err) }}; return addr }}()",
                     seeds.join(", ")
                 )
             } else {
@@ -316,7 +316,7 @@ fn go_type(ty: &IdlType) -> &'static str {
             "string" => "string",
             _ => "[]byte",
         },
-        IdlType::DynString { .. } => "[]byte",
+        IdlType::DynString { .. } => "string",
         IdlType::DynVec { .. } => "[]byte", // simplified — callers handle generics
         IdlType::Defined { .. } => "[]byte",
         IdlType::Tail { .. } => "[]byte",
@@ -391,11 +391,14 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
                 "\tdata = append(data, input.{}[:]...)\n",
                 name,
             ),
+            "string" => format!(
+                "\t{{ b := []byte(input.{n}); var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(len(b))); data = append(data, buf[:]...); data = append(data, b...) }}\n",
+                n = name,
+            ),
             _ => format!("\tdata = append(data, input.{}...)\n", name),
         },
         IdlType::DynString { .. } => format!(
-            "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(len(input.{n}))); data = append(data, buf[:]...) }}\n\
-             \tdata = append(data, input.{n}...)\n",
+            "\t{{ b := []byte(input.{n}); var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(len(b))); data = append(data, buf[:]...); data = append(data, b...) }}\n",
             n = name,
         ),
         IdlType::DynVec { .. } | IdlType::Defined { .. } | IdlType::Tail { .. } => format!(
@@ -473,8 +476,7 @@ fn decode_field_expr(name: &str, ty: &IdlType, depth: usize) -> String {
         IdlType::DynString { .. } => format!(
             "{t}{n}Len := binary.LittleEndian.Uint32(data[offset:])\n\
              {t}offset += 4\n\
-             {t}{n} := make([]byte, {n}Len)\n\
-             {t}copy({n}, data[offset:offset+int({n}Len)])\n\
+             {t}{n} := string(data[offset:offset+int({n}Len)])\n\
              {t}offset += int({n}Len)\n",
             t = t, n = name,
         ),

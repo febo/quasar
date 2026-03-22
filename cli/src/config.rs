@@ -85,10 +85,25 @@ impl QuasarConfig {
             e
         })?;
         let config: QuasarConfig = toml::from_str(&contents).map_err(|e| {
-            eprintln!(
-                "\n  {}",
-                crate::style::fail(&format!("Invalid {}: {e}", path.display()))
-            );
+            // Check if this looks like an old-format config (pre-init-rework)
+            if contents.contains("[testing]\nframework")
+                || contents.contains("[testing]\r\nframework")
+                || (contents.contains("[testing]") && !contents.contains("language"))
+            {
+                eprintln!(
+                    "\n  {}",
+                    crate::style::fail("Quasar.toml uses an outdated format.")
+                );
+                eprintln!(
+                    "  Run {} and re-init your project.",
+                    crate::style::bold("quasar config reset")
+                );
+            } else {
+                eprintln!(
+                    "\n  {}",
+                    crate::style::fail(&format!("Invalid {}: {e}", path.display()))
+                );
+            }
             e
         })?;
         Ok(config)

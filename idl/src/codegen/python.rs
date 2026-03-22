@@ -358,7 +358,7 @@ fn python_type(ty: &IdlType) -> &'static str {
             "string" => "str",
             _ => "bytes",
         },
-        IdlType::DynString { .. } => "bytes",
+        IdlType::DynString { .. } => "str",
         IdlType::DynVec { .. } => "list",
         IdlType::Defined { .. } => "bytes",
         IdlType::Tail { .. } => "bytes",
@@ -396,8 +396,9 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
         },
         IdlType::DynString { .. } => {
             format!(
-                "    data += struct.pack(\"<I\", len(input.{n}))\n\
-                 \x20   data += input.{n}\n",
+                "    _b = input.{n}.encode(\"utf-8\")\n\
+                 \x20   data += struct.pack(\"<I\", len(_b))\n\
+                 \x20   data += _b\n",
                 n = name,
             )
         }
@@ -482,7 +483,7 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
         IdlType::DynString { .. } => format!(
             "{pad}_len = struct.unpack_from(\"<I\", data, offset)[0]\n\
              {pad}offset += 4\n\
-             {pad}{n} = data[offset:offset + _len]\n\
+             {pad}{n} = data[offset:offset + _len].decode(\"utf-8\")\n\
              {pad}offset += _len\n",
             pad = pad,
             n = name,

@@ -289,16 +289,7 @@ pub struct CompletionsCommand {
 
 pub fn run(cli: Cli) -> CliResult {
     match cli.command {
-        Command::Init(cmd) => init::run(
-            cmd.name,
-            cmd.yes,
-            cmd.no_git,
-            cmd.test_language,
-            cmd.rust_framework,
-            cmd.ts_sdk,
-            cmd.template,
-            cmd.toolchain,
-        ),
+        Command::Init(cmd) => init::run(cmd),
         Command::Add(cmd) => {
             if cmd.instruction.is_none() && cmd.state.is_none() && cmd.error.is_none() {
                 eprintln!(

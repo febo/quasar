@@ -1,6 +1,6 @@
 use {
     crate::{config::QuasarConfig, error::CliResult, style},
-    std::{fs, path::PathBuf},
+    std::{fs, path::{Path, PathBuf}},
 };
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ fn keypair_path(config: &QuasarConfig) -> PathBuf {
 
 /// Read the public key (program ID) from a Solana CLI-compatible keypair file.
 /// The file contains a 64-byte JSON array: [secret(32) | public(32)].
-fn read_program_id(path: &PathBuf) -> Result<String, crate::error::CliError> {
+fn read_program_id(path: &Path) -> Result<String, crate::error::CliError> {
     let json = fs::read_to_string(path).map_err(anyhow::Error::from)?;
     let bytes: Vec<u8> = serde_json::from_str(&json).map_err(anyhow::Error::from)?;
     Ok(bs58::encode(&bytes[32..64]).into_string())

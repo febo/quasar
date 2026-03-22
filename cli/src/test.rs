@@ -124,7 +124,12 @@ fn run_test_cmd(test_cmd: &str, filter: Option<&str>) -> CliResult {
     cmd.args(&parts[1..]);
 
     if let Some(pattern) = filter {
-        cmd.args(["-t", pattern]);
+        // cargo test uses a positional filter; vitest/jest use -t
+        if parts[0] == "cargo" {
+            cmd.arg(pattern);
+        } else {
+            cmd.args(["-t", pattern]);
+        }
     }
 
     let status = cmd.status();

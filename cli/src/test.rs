@@ -124,7 +124,7 @@ struct TestSummary {
 }
 
 // ---------------------------------------------------------------------------
-// TypeScript (mocha --reporter json)
+// TypeScript (vitest --reporter=json)
 // ---------------------------------------------------------------------------
 
 fn run_typescript_tests(filter: Option<&str>) -> Result<TestSummary, TestSummary> {
@@ -155,16 +155,12 @@ fn run_typescript_tests(filter: Option<&str>) -> Result<TestSummary, TestSummary
         }
     }
 
-    // Run mocha with JSON reporter to get structured results
+    // Run vitest with JSON reporter to get structured results
     let mut cmd = Command::new("npx");
-    cmd.args(["mocha", "--require", "tsx", "--delay", "--reporter", "json"]);
-
-    // Find test files matching the glob pattern from package.json
-    // Default to tests/*.test.ts
-    cmd.arg("tests/*.test.ts");
+    cmd.args(["vitest", "run", "--reporter=json"]);
 
     if let Some(pattern) = filter {
-        cmd.args(["--grep", pattern]);
+        cmd.args(["-t", pattern]);
     }
 
     let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output();
@@ -172,7 +168,7 @@ fn run_typescript_tests(filter: Option<&str>) -> Result<TestSummary, TestSummary
     let o = match output {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("  {}", style::fail(&format!("failed to run mocha: {e}")));
+            eprintln!("  {}", style::fail(&format!("failed to run vitest: {e}")));
             std::process::exit(1);
         }
     };
@@ -181,7 +177,7 @@ fn run_typescript_tests(filter: Option<&str>) -> Result<TestSummary, TestSummary
 
     // Try to parse JSON output
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        return parse_mocha_json(&json);
+        return parse_vitest_json(&json);
     }
 
     // Fallback: couldn't parse JSON, show raw output
@@ -205,40 +201,51 @@ fn run_typescript_tests(filter: Option<&str>) -> Result<TestSummary, TestSummary
     }
 }
 
-fn parse_mocha_json(json: &serde_json::Value) -> Result<TestSummary, TestSummary> {
+fn parse_vitest_json(json: &serde_json::Value) -> Result<TestSummary, TestSummary> {
     let mut lines = Vec::new();
     let mut passed = 0usize;
     let mut failed = 0usize;
 
-    if let Some(passes) = json.get("passes").and_then(|v| v.as_array()) {
-        for test in passes {
-            let title = test
-                .get("fullTitle")
-                .and_then(|t| t.as_str())
-                .unwrap_or("?");
-            lines.push(style::success(title));
-            passed += 1;
-        }
-    }
+    if let Some(test_results) = json.get("testResults").and_then(|v| v.as_array()) {
+        for suite in test_results {
+            if let Some(assertions) = suite.get("assertionResults").and_then(|v| v.as_array()) {
+                for test in assertions {
+                    let title = test
+                        .get("fullName")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("?");
+                    let status = test
+                        .get("status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("");
 
-    if let Some(failures) = json.get("failures").and_then(|v| v.as_array()) {
-        for test in failures {
-            let title = test
-                .get("fullTitle")
-                .and_then(|t| t.as_str())
-                .unwrap_or("?");
-            lines.push(style::fail(title));
-
-            // Show error message indented
-            if let Some(err) = test.get("err") {
-                if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
-                    for line in msg.lines().take(10) {
-                        lines.push(format!("    {}", format_failure_line(line)));
+                    match status {
+                        "passed" => {
+                            lines.push(style::success(title));
+                            passed += 1;
+                        }
+                        "failed" => {
+                            lines.push(style::fail(title));
+                            if let Some(messages) =
+                                test.get("failureMessages").and_then(|v| v.as_array())
+                            {
+                                for msg in messages {
+                                    if let Some(msg_str) = msg.as_str() {
+                                        for line in msg_str.lines().take(10) {
+                                            lines.push(format!(
+                                                "    {}",
+                                                format_failure_line(line)
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            failed += 1;
+                        }
+                        _ => {}
                     }
                 }
             }
-
-            failed += 1;
         }
     }
 

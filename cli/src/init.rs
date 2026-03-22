@@ -912,22 +912,17 @@ fn generate_package_json(name: &str, framework: Framework) -> String {
   "name": "{name}",
   "version": "0.1.0",
   "private": true,
-  "type": "commonjs",
   "scripts": {{
-    "test": "mocha --require tsx --delay tests/*.test.ts"
+    "test": "vitest run"
   }},
   "dependencies": {{
     "@blueshift-gg/quasar-svm": "^0.1",
     {solana_dep}
   }},
   "devDependencies": {{
-    "@types/chai": "^5.2.0",
-    "@types/mocha": "^10.0.0",
     "@types/node": "^22.0.0",
-    "chai": "^6.2.2",
-    "mocha": "^11.7.5",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.1.0"
   }}
 }}
 "#
@@ -946,21 +941,19 @@ fn generate_test_ts(name: &str, framework: Framework, toolchain: Toolchain) -> S
         format!(
             r#"import {{ generateKeyPairSigner }} from "@solana/kit";
 import {{ {class_name}Client, PROGRAM_ADDRESS }} from "../target/client/typescript/{module_name}/kit";
-import {{ describe, it, run }} from "mocha";
+import {{ describe, it, expect }} from "vitest";
 import {{ QuasarSvm, createKeyedSystemAccount }} from "@blueshift-gg/quasar-svm/kit";
 import {{ readFile }} from "node:fs/promises";
-import {{ assert }} from "chai";
 
 const {class_name}Program = new {class_name}Client();
 
-describe("{class_name} Program", async () => {{
-
+describe.concurrent("{class_name} Program", async () => {{
   const vm = new QuasarSvm();
   vm.addProgram(PROGRAM_ADDRESS, await readFile("target/deploy/{so_name}.so"));
 
-  const payer = await generateKeyPairSigner();
-
   it("initializes", async () => {{
+    const payer = await generateKeyPairSigner();
+
     const initializeInstruction = {class_name}Program.createInitializeInstruction({{
       payer: payer.address,
     }});
@@ -969,10 +962,8 @@ describe("{class_name} Program", async () => {{
       createKeyedSystemAccount(payer.address),
     ]);
 
-    assert.isTrue(result.status.ok, `initialize failed:\n${{result.logs.join("\n")}}`);
+    expect(result.status.ok, `initialize failed:\n${{result.logs.join("\n")}}`).toBe(true);
   }});
-
-  run()
 }});
 "#
         )
@@ -981,19 +972,18 @@ describe("{class_name} Program", async () => {{
             r#"import {{ Keypair }} from "@solana/web3.js";
 import {{ {class_name}Client }} from "../target/client/typescript/{module_name}/web3.js";
 import {{ readFile }} from "node:fs/promises";
-import {{ describe, it, run }} from "mocha";
-import {{ assert }} from "chai";
+import {{ describe, it, expect }} from "vitest";
 import {{ QuasarSvm, createKeyedSystemAccount }} from "@blueshift-gg/quasar-svm/web3.js";
 
 const {class_name}Program = new {class_name}Client();
 
-describe("{class_name} Program", async () => {{
+describe.concurrent("{class_name} Program", async () => {{
   const vm = new QuasarSvm();
   vm.addProgram({class_name}Client.programId, await readFile("target/deploy/{so_name}.so"));
 
-  const {{ publicKey: payer }} = await Keypair.generate();
-
   it("initializes", async () => {{
+    const {{ publicKey: payer }} = await Keypair.generate();
+
     const initializeInstruction = {class_name}Program.createInitializeInstruction({{
       payer,
     }});
@@ -1002,10 +992,8 @@ describe("{class_name} Program", async () => {{
       createKeyedSystemAccount(payer),
     ]);
 
-    assert.isTrue(result.status.ok, `initialize failed:\n${{result.logs.join("\n")}}`);
+    expect(result.status.ok, `initialize failed:\n${{result.logs.join("\n")}}`).toBe(true);
   }});
-
-  run();
 }});
 "#
         )
@@ -1208,7 +1196,7 @@ const TS_TEST_TSCONFIG: &str = r#"{
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["node", "mocha"]
+    "types": ["node"]
   },
   "include": ["tests/*.test.ts"]
 }

@@ -1,6 +1,9 @@
 use {
     crate::{config::QuasarConfig, error::CliResult, style},
-    std::{fs, path::{Path, PathBuf}},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 // ---------------------------------------------------------------------------

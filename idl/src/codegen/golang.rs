@@ -20,9 +20,13 @@ pub fn generate_go_client(idl: &Idl) -> String {
     let has_types_with_fields = idl.types.iter().any(|t| !t.ty.fields.is_empty());
     let needs_binary = has_args || has_events || has_types_with_fields;
     let has_floats = idl.instructions.iter().any(|ix| {
-        ix.args.iter().any(|a| matches!(&a.ty, IdlType::Primitive(p) if p == "f32" || p == "f64"))
+        ix.args
+            .iter()
+            .any(|a| matches!(&a.ty, IdlType::Primitive(p) if p == "f32" || p == "f64"))
     }) || idl.types.iter().any(|t| {
-        t.ty.fields.iter().any(|f| matches!(&f.ty, IdlType::Primitive(p) if p == "f32" || p == "f64"))
+        t.ty.fields
+            .iter()
+            .any(|f| matches!(&f.ty, IdlType::Primitive(p) if p == "f32" || p == "f64"))
     });
 
     out.push_str("import (\n");
@@ -97,13 +101,7 @@ pub fn generate_go_client(idl: &Idl) -> String {
     for type_def in &idl.types {
         writeln!(out, "type {} struct {{", type_def.name).unwrap();
         for field in &type_def.ty.fields {
-            writeln!(
-                out,
-                "\t{} {}",
-                to_pascal(&field.name),
-                go_type(&field.ty),
-            )
-            .unwrap();
+            writeln!(out, "\t{} {}", to_pascal(&field.name), go_type(&field.ty),).unwrap();
         }
         out.push_str("}\n\n");
 
@@ -117,11 +115,7 @@ pub fn generate_go_client(idl: &Idl) -> String {
             .unwrap();
             out.push_str("\toffset := 0\n");
             for field in &type_def.ty.fields {
-                out.push_str(&decode_field_expr(
-                    &to_camel(&field.name),
-                    &field.ty,
-                    1,
-                ));
+                out.push_str(&decode_field_expr(&to_camel(&field.name), &field.ty, 1));
             }
             let field_assigns: Vec<String> = type_def
                 .ty
@@ -155,13 +149,7 @@ pub fn generate_go_client(idl: &Idl) -> String {
             writeln!(out, "\t{} solana.PublicKey", to_pascal(&acc.name)).unwrap();
         }
         for arg in &ix.args {
-            writeln!(
-                out,
-                "\t{} {}",
-                to_pascal(&arg.name),
-                go_type(&arg.ty),
-            )
-            .unwrap();
+            writeln!(out, "\t{} {}", to_pascal(&arg.name), go_type(&arg.ty),).unwrap();
         }
         if ix.has_remaining {
             out.push_str("\tRemainingAccounts []*solana.AccountMeta\n");
@@ -196,7 +184,9 @@ pub fn generate_go_client(idl: &Idl) -> String {
                 }
                 // PDA derivation inline — panic on error (invalid seeds = programmer error)
                 format!(
-                    "func() solana.PublicKey {{ addr, _, err := solana.FindProgramAddress([][]byte{{{}}}, ProgramID); if err != nil {{ panic(err) }}; return addr }}()",
+                    "func() solana.PublicKey {{ addr, _, err := \
+                     solana.FindProgramAddress([][]byte{{{}}}, ProgramID); if err != nil {{ \
+                     panic(err) }}; return addr }}()",
                     seeds.join(", ")
                 )
             } else {
@@ -346,65 +336,70 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => format!(
-                "\tif input.{n} {{\n\t\tdata = append(data, 1)\n\t}} else {{\n\t\tdata = append(data, 0)\n\t}}\n",
+                "\tif input.{n} {{\n\t\tdata = append(data, 1)\n\t}} else {{\n\t\tdata = \
+                 append(data, 0)\n\t}}\n",
                 n = name,
             ),
             "u8" => format!("\tdata = append(data, input.{})\n", name),
             "i8" => format!("\tdata = append(data, byte(input.{}))\n", name),
             "u16" => format!(
-                "\t{{ var buf [2]byte; binary.LittleEndian.PutUint16(buf[:], input.{n}); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [2]byte; binary.LittleEndian.PutUint16(buf[:], input.{n}); data = \
+                 append(data, buf[:]...) }}\n",
                 n = name,
             ),
             "i16" => format!(
-                "\t{{ var buf [2]byte; binary.LittleEndian.PutUint16(buf[:], uint16(input.{n})); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [2]byte; binary.LittleEndian.PutUint16(buf[:], uint16(input.{n})); \
+                 data = append(data, buf[:]...) }}\n",
                 n = name,
             ),
             "u32" => format!(
-                "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], input.{n}); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], input.{n}); data = \
+                 append(data, buf[:]...) }}\n",
                 n = name,
             ),
             "i32" => format!(
-                "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(input.{n})); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(input.{n})); \
+                 data = append(data, buf[:]...) }}\n",
                 n = name,
             ),
             "u64" => format!(
-                "\t{{ var buf [8]byte; binary.LittleEndian.PutUint64(buf[:], input.{n}); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [8]byte; binary.LittleEndian.PutUint64(buf[:], input.{n}); data = \
+                 append(data, buf[:]...) }}\n",
                 n = name,
             ),
             "i64" => format!(
-                "\t{{ var buf [8]byte; binary.LittleEndian.PutUint64(buf[:], uint64(input.{n})); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [8]byte; binary.LittleEndian.PutUint64(buf[:], uint64(input.{n})); \
+                 data = append(data, buf[:]...) }}\n",
                 n = name,
             ),
-            "u128" | "i128" => format!(
-                "\tdata = append(data, input.{}[:]...)\n",
-                name,
-            ),
+            "u128" | "i128" => format!("\tdata = append(data, input.{}[:]...)\n", name,),
             "f32" => format!(
-                "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], math.Float32bits(input.{n})); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], \
+                 math.Float32bits(input.{n})); data = append(data, buf[:]...) }}\n",
                 n = name,
             ),
             "f64" => format!(
-                "\t{{ var buf [8]byte; binary.LittleEndian.PutUint64(buf[:], math.Float64bits(input.{n})); data = append(data, buf[:]...) }}\n",
+                "\t{{ var buf [8]byte; binary.LittleEndian.PutUint64(buf[:], \
+                 math.Float64bits(input.{n})); data = append(data, buf[:]...) }}\n",
                 n = name,
             ),
-            "publicKey" => format!(
-                "\tdata = append(data, input.{}[:]...)\n",
-                name,
-            ),
+            "publicKey" => format!("\tdata = append(data, input.{}[:]...)\n", name,),
             "string" => format!(
-                "\t{{ b := []byte(input.{n}); var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(len(b))); data = append(data, buf[:]...); data = append(data, b...) }}\n",
+                "\t{{ b := []byte(input.{n}); var buf [4]byte; \
+                 binary.LittleEndian.PutUint32(buf[:], uint32(len(b))); data = append(data, \
+                 buf[:]...); data = append(data, b...) }}\n",
                 n = name,
             ),
             _ => format!("\tdata = append(data, input.{}...)\n", name),
         },
         IdlType::DynString { .. } => format!(
-            "\t{{ b := []byte(input.{n}); var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], uint32(len(b))); data = append(data, buf[:]...); data = append(data, b...) }}\n",
+            "\t{{ b := []byte(input.{n}); var buf [4]byte; binary.LittleEndian.PutUint32(buf[:], \
+             uint32(len(b))); data = append(data, buf[:]...); data = append(data, b...) }}\n",
             n = name,
         ),
-        IdlType::DynVec { .. } | IdlType::Defined { .. } | IdlType::Tail { .. } => format!(
-            "\tdata = append(data, input.{}...)\n",
-            name,
-        ),
+        IdlType::DynVec { .. } | IdlType::Defined { .. } | IdlType::Tail { .. } => {
+            format!("\tdata = append(data, input.{}...)\n", name,)
+        }
     }
 }
 
@@ -418,71 +413,84 @@ fn decode_field_expr(name: &str, ty: &IdlType, depth: usize) -> String {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => format!(
                 "{t}{n} := data[offset] != 0\n{t}offset += 1\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
-            "u8" => format!(
-                "{t}{n} := data[offset]\n{t}offset += 1\n",
-                t = t, n = name,
-            ),
+            "u8" => format!("{t}{n} := data[offset]\n{t}offset += 1\n", t = t, n = name,),
             "i8" => format!(
                 "{t}{n} := int8(data[offset])\n{t}offset += 1\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "u16" => format!(
                 "{t}{n} := binary.LittleEndian.Uint16(data[offset:])\n{t}offset += 2\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "i16" => format!(
                 "{t}{n} := int16(binary.LittleEndian.Uint16(data[offset:]))\n{t}offset += 2\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "u32" => format!(
                 "{t}{n} := binary.LittleEndian.Uint32(data[offset:])\n{t}offset += 4\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "i32" => format!(
                 "{t}{n} := int32(binary.LittleEndian.Uint32(data[offset:]))\n{t}offset += 4\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "u64" => format!(
                 "{t}{n} := binary.LittleEndian.Uint64(data[offset:])\n{t}offset += 8\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "i64" => format!(
                 "{t}{n} := int64(binary.LittleEndian.Uint64(data[offset:]))\n{t}offset += 8\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "u128" | "i128" => format!(
                 "{t}var {n} [16]byte\n{t}copy({n}[:], data[offset:offset+16])\n{t}offset += 16\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
             "f32" => format!(
-                "{t}{n} := math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))\n{t}offset += 4\n",
-                t = t, n = name,
+                "{t}{n} := math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))\\
+                 n{t}offset += 4\n",
+                t = t,
+                n = name,
             ),
             "f64" => format!(
-                "{t}{n} := math.Float64frombits(binary.LittleEndian.Uint64(data[offset:]))\n{t}offset += 8\n",
-                t = t, n = name,
+                "{t}{n} := math.Float64frombits(binary.LittleEndian.Uint64(data[offset:]))\\
+                 n{t}offset += 8\n",
+                t = t,
+                n = name,
             ),
             "publicKey" => format!(
-                "{t}var {n} solana.PublicKey\n{t}copy({n}[:], data[offset:offset+32])\n{t}offset += 32\n",
-                t = t, n = name,
+                "{t}var {n} solana.PublicKey\n{t}copy({n}[:], data[offset:offset+32])\n{t}offset \
+                 += 32\n",
+                t = t,
+                n = name,
             ),
             _ => format!(
                 "{t}{n} := data[offset:] // unsupported type\n{t}_ = {n}\n",
-                t = t, n = name,
+                t = t,
+                n = name,
             ),
         },
         IdlType::DynString { .. } => format!(
-            "{t}{n}Len := binary.LittleEndian.Uint32(data[offset:])\n\
-             {t}offset += 4\n\
-             {t}{n} := string(data[offset:offset+int({n}Len)])\n\
-             {t}offset += int({n}Len)\n",
-            t = t, n = name,
+            "{t}{n}Len := binary.LittleEndian.Uint32(data[offset:])\n{t}offset += 4\n{t}{n} := \
+             string(data[offset:offset+int({n}Len)])\n{t}offset += int({n}Len)\n",
+            t = t,
+            n = name,
         ),
         IdlType::DynVec { .. } | IdlType::Defined { .. } | IdlType::Tail { .. } => format!(
             "{t}{n} := data[offset:] // remaining bytes\n{t}_ = {n}\n",
-            t = t, n = name,
+            t = t,
+            n = name,
         ),
     }
 }

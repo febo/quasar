@@ -357,7 +357,9 @@ pub fn run(cmd: crate::InitCommand) -> CliResult {
             );
             eprintln!(
                 "  {}",
-                crate::style::dim("usage: quasar init <name> [--test-language ...] [--template ...]")
+                crate::style::dim(
+                    "usage: quasar init <name> [--test-language ...] [--template ...]"
+                )
             );
             std::process::exit(1);
         })
@@ -657,7 +659,17 @@ pub fn run(cmd: crate::InitCommand) -> CliResult {
         );
     }
 
-    scaffold::scaffold(&name, &crate_name, toolchain, test_language, rust_framework, ts_sdk, template, package_manager.as_ref(), &client_languages)?;
+    scaffold::scaffold(
+        &name,
+        &crate_name,
+        toolchain,
+        test_language,
+        rust_framework,
+        ts_sdk,
+        template,
+        package_manager.as_ref(),
+        &client_languages,
+    )?;
 
     // Optional git setup (unless already in a git repo)
     maybe_initialize_git_repo(&name, git_setup);

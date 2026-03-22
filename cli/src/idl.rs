@@ -20,7 +20,10 @@ pub fn generate(crate_path: &Path, languages: &[&str]) -> CliResult {
     let (client_code, client_cargo_toml) = if languages.contains(&"rust") {
         (
             Some(codegen::rust::generate_client(&parsed)),
-            Some(codegen::rust::generate_cargo_toml(&parsed.crate_name, &parsed.version)),
+            Some(codegen::rust::generate_cargo_toml(
+                &parsed.crate_name,
+                &parsed.version,
+            )),
         )
     } else {
         (None, None)
@@ -106,9 +109,10 @@ pub fn generate(crate_path: &Path, languages: &[&str]) -> CliResult {
         std::fs::create_dir_all(&py_dir)?;
 
         std::fs::write(py_dir.join("client.py"), &py_code)?;
-        std::fs::write(py_dir.join("__init__.py"), format!(
-            "from .client import *  # noqa: F401,F403\n"
-        ))?;
+        std::fs::write(
+            py_dir.join("__init__.py"),
+            "from .client import *  # noqa: F401,F403\n",
+        )?;
     }
 
     // Go client

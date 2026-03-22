@@ -32,17 +32,14 @@ pub fn generate_python_client(idl: &Idl) -> String {
                 IdlType::DynString { .. } | IdlType::DynVec { .. } | IdlType::Tail { .. }
             )
         })
-    }) || idl
-        .types
-        .iter()
-        .any(|t| {
-            t.ty.fields.iter().any(|f| {
-                matches!(
-                    f.ty,
-                    IdlType::DynString { .. } | IdlType::DynVec { .. } | IdlType::Tail { .. }
-                )
-            })
-        });
+    }) || idl.types.iter().any(|t| {
+        t.ty.fields.iter().any(|f| {
+            matches!(
+                f.ty,
+                IdlType::DynString { .. } | IdlType::DynVec { .. } | IdlType::Tail { .. }
+            )
+        })
+    });
 
     if has_events || has_args || has_dynamic {
         out.push_str("from typing import Optional\n");
@@ -174,13 +171,7 @@ pub fn generate_python_client(idl: &Idl) -> String {
 
         // Arg fields
         for arg in &ix.args {
-            writeln!(
-                out,
-                "    {}: {}",
-                to_snake(&arg.name),
-                python_type(&arg.ty)
-            )
-            .unwrap();
+            writeln!(out, "    {}: {}", to_snake(&arg.name), python_type(&arg.ty)).unwrap();
             has_any_fields = true;
         }
 
@@ -243,7 +234,8 @@ pub fn generate_python_client(idl: &Idl) -> String {
 
         if ix.has_remaining {
             out.push_str(
-                "    if input.remaining_accounts:\n        accounts.extend(input.remaining_accounts)\n",
+                "    if input.remaining_accounts:\n        \
+                 accounts.extend(input.remaining_accounts)\n",
             );
         }
 
@@ -252,12 +244,7 @@ pub fn generate_python_client(idl: &Idl) -> String {
         if ix.args.is_empty() {
             writeln!(out, "    data = {}_DISCRIMINATOR", const_name).unwrap();
         } else {
-            writeln!(
-                out,
-                "    data = bytearray({}_DISCRIMINATOR)",
-                const_name
-            )
-            .unwrap();
+            writeln!(out, "    data = bytearray({}_DISCRIMINATOR)", const_name).unwrap();
             for arg in &ix.args {
                 out.push_str(&serialize_field_expr(&to_snake(&arg.name), &arg.ty));
             }
@@ -272,7 +259,10 @@ pub fn generate_python_client(idl: &Idl) -> String {
         // Event dataclasses are already generated via type definitions above,
         // but we need a decode_event function
         out.push_str("\ndef decode_event(data: bytes) -> Optional[tuple[str, object]]:\n");
-        out.push_str("    \"\"\"Decode an event from raw log data. Returns (event_name, event_data) or None.\"\"\"\n");
+        out.push_str(
+            "    \"\"\"Decode an event from raw log data. Returns (event_name, event_data) or \
+             None.\"\"\"\n",
+        );
         for ev in &idl.events {
             let const_name = to_screaming_snake(&ev.name);
             let type_def = idl.types.iter().find(|t| t.name == ev.name);
@@ -322,20 +312,13 @@ pub fn generate_python_client(idl: &Idl) -> String {
             fn_name, class_name
         )
         .unwrap();
-        writeln!(
-            out,
-            "        return create_{}_instruction(input)",
-            fn_name
-        )
-        .unwrap();
+        writeln!(out, "        return create_{}_instruction(input)", fn_name).unwrap();
         out.push('\n');
     }
 
     if has_events {
         out.push_str("    @staticmethod\n");
-        out.push_str(
-            "    def decode_event(data: bytes) -> Optional[tuple[str, object]]:\n",
-        );
+        out.push_str("    def decode_event(data: bytes) -> Optional[tuple[str, object]]:\n");
         out.push_str("        return decode_event(data)\n\n");
     }
 
@@ -350,9 +333,7 @@ fn python_type(ty: &IdlType) -> &'static str {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => "bool",
-            "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" => {
-                "int"
-            }
+            "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" => "int",
             "f32" | "f64" => "float",
             "publicKey" => "Pubkey",
             "string" => "str",
@@ -396,9 +377,8 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
         },
         IdlType::DynString { .. } => {
             format!(
-                "    _b = input.{n}.encode(\"utf-8\")\n\
-                 \x20   data += struct.pack(\"<I\", len(_b))\n\
-                 \x20   data += _b\n",
+                "    _b = input.{n}.encode(\"utf-8\")\n\x20   data += struct.pack(\"<I\", \
+                 len(_b))\n\x20   data += _b\n",
                 n = name,
             )
         }
@@ -412,9 +392,8 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
                 _ => "item".to_string(),
             };
             format!(
-                "    data += struct.pack(\"<I\", len(input.{n}))\n\
-                 \x20   for item in input.{n}:\n\
-                 \x20       data += {ser}\n",
+                "    data += struct.pack(\"<I\", len(input.{n}))\n\x20   for item in \
+                 input.{n}:\n\x20       data += {ser}\n",
                 n = name,
                 ser = item_ser,
             )
@@ -433,8 +412,7 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => format!(
-                "{pad}{n} = struct.unpack_from(\"<?\", data, offset)[0]\n\
-                 {pad}offset += 1\n",
+                "{pad}{n} = struct.unpack_from(\"<?\", data, offset)[0]\n{pad}offset += 1\n",
                 pad = pad,
                 n = name,
             ),
@@ -444,26 +422,24 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
                 n = name,
             ),
             "i8" => format!(
-                "{pad}{n} = struct.unpack_from(\"<b\", data, offset)[0]\n\
-                 {pad}offset += 1\n",
+                "{pad}{n} = struct.unpack_from(\"<b\", data, offset)[0]\n{pad}offset += 1\n",
                 pad = pad,
                 n = name,
             ),
             "publicKey" => format!(
-                "{pad}{n} = Pubkey.from_bytes(data[offset:offset + 32])\n\
-                 {pad}offset += 32\n",
+                "{pad}{n} = Pubkey.from_bytes(data[offset:offset + 32])\n{pad}offset += 32\n",
                 pad = pad,
                 n = name,
             ),
             "u128" => format!(
-                "{pad}{n} = int.from_bytes(data[offset:offset + 16], byteorder=\"little\")\n\
-                 {pad}offset += 16\n",
+                "{pad}{n} = int.from_bytes(data[offset:offset + 16], \
+                 byteorder=\"little\")\n{pad}offset += 16\n",
                 pad = pad,
                 n = name,
             ),
             "i128" => format!(
-                "{pad}{n} = int.from_bytes(data[offset:offset + 16], byteorder=\"little\", signed=True)\n\
-                 {pad}offset += 16\n",
+                "{pad}{n} = int.from_bytes(data[offset:offset + 16], byteorder=\"little\", \
+                 signed=True)\n{pad}offset += 16\n",
                 pad = pad,
                 n = name,
             ),
@@ -471,8 +447,8 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
                 let fmt = struct_format(other);
                 let size = primitive_size(other);
                 format!(
-                    "{pad}{n} = struct.unpack_from(\"<{fmt}\", data, offset)[0]\n\
-                     {pad}offset += {sz}\n",
+                    "{pad}{n} = struct.unpack_from(\"<{fmt}\", data, offset)[0]\n{pad}offset += \
+                     {sz}\n",
                     pad = pad,
                     n = name,
                     fmt = fmt,
@@ -481,18 +457,16 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
             }
         },
         IdlType::DynString { .. } => format!(
-            "{pad}_len = struct.unpack_from(\"<I\", data, offset)[0]\n\
-             {pad}offset += 4\n\
-             {pad}{n} = data[offset:offset + _len].decode(\"utf-8\")\n\
-             {pad}offset += _len\n",
+            "{pad}_len = struct.unpack_from(\"<I\", data, offset)[0]\n{pad}offset += 4\n{pad}{n} \
+             = data[offset:offset + _len].decode(\"utf-8\")\n{pad}offset += _len\n",
             pad = pad,
             n = name,
         ),
         IdlType::DynVec { vec } => {
             let item_decode = match &*vec.items {
-                IdlType::Primitive(p) if p == "publicKey" => format!(
-                    "Pubkey.from_bytes(data[offset:offset + 32]); offset += 32"
-                ),
+                IdlType::Primitive(p) if p == "publicKey" => {
+                    "Pubkey.from_bytes(data[offset:offset + 32]); offset += 32".to_string()
+                }
                 IdlType::Primitive(p) => {
                     let fmt = struct_format(p);
                     let sz = primitive_size(p);

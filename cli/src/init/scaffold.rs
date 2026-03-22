@@ -1,7 +1,7 @@
 use {
     super::{
-        templates::*,
-        PackageManager, RustFramework, Template, TestLanguage, Toolchain, TypeScriptSdk,
+        templates::*, PackageManager, RustFramework, Template, TestLanguage, Toolchain,
+        TypeScriptSdk,
     },
     crate::error::CliResult,
     std::{fs, path::Path},
@@ -156,11 +156,8 @@ pub(super) fn scaffold(
         let tests_dir = root.join("tests");
         fs::create_dir_all(&tests_dir).map_err(anyhow::Error::from)?;
 
-        fs::write(
-            root.join("package.json"),
-            generate_package_json(name, sdk),
-        )
-        .map_err(anyhow::Error::from)?;
+        fs::write(root.join("package.json"), generate_package_json(name, sdk))
+            .map_err(anyhow::Error::from)?;
         fs::write(root.join("tsconfig.json"), TS_TEST_TSCONFIG).map_err(anyhow::Error::from)?;
 
         fs::write(
@@ -177,7 +174,12 @@ pub(super) fn scaffold(
 // Generators
 // ---------------------------------------------------------------------------
 
-fn generate_cargo_toml(name: &str, toolchain: Toolchain, test_language: TestLanguage, rust_framework: Option<RustFramework>) -> String {
+fn generate_cargo_toml(
+    name: &str,
+    toolchain: Toolchain,
+    test_language: TestLanguage,
+    rust_framework: Option<RustFramework>,
+) -> String {
     let mut out = format!(
         r#"[package]
 name = "{name}"

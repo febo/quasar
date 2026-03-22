@@ -14,8 +14,17 @@ pub mod state;
 
 use {
     crate::types::*,
-    std::{collections::BTreeMap, path::Path},
+    std::{
+        collections::{BTreeMap, BTreeSet, HashSet},
+        path::Path,
+    },
 };
+
+/// Raw struct definition (potential instruction argument type).
+pub struct RawDataStruct {
+    pub name: String,
+    pub fields: Vec<(String, syn::Type)>,
+}
 
 /// All data extracted from parsing a quasar program crate.
 pub struct ParsedProgram {
@@ -30,6 +39,9 @@ pub struct ParsedProgram {
     pub state_accounts: Vec<state::RawStateAccount>,
     pub events: Vec<events::RawEvent>,
     pub errors: Vec<IdlError>,
+    /// All struct definitions from source files (potential instruction arg
+    /// types).
+    pub data_structs: Vec<RawDataStruct>,
 }
 
 /// Parse an entire quasar program crate and produce a `ParsedProgram`.
@@ -75,7 +87,13 @@ pub fn parse_program(crate_root: &Path) -> ParsedProgram {
         all_errors.extend(errors::extract_errors(&file.file));
     }
 
-    // 9. Read version and crate name from Cargo.toml
+    // 9. Collect all struct definitions (potential instruction arg types)
+    let mut data_structs = Vec::new();
+    for file in &files {
+        data_structs.extend(extract_plain_structs(&file.file));
+    }
+
+    // 10. Read version and crate name from Cargo.toml
     let version = read_cargo_version(crate_root).unwrap_or_else(|| "0.1.0".to_string());
     let crate_name = read_cargo_name(crate_root).unwrap_or_else(|| program_name.replace('_', "-"));
 
@@ -89,6 +107,7 @@ pub fn parse_program(crate_root: &Path) -> ParsedProgram {
         state_accounts,
         events: all_events,
         errors: all_errors,
+        data_structs,
     }
 }
 
@@ -108,6 +127,7 @@ pub fn build_idl(parsed: ParsedProgram) -> Idl {
         state_accounts,
         events: raw_events,
         errors,
+        data_structs,
     } = parsed;
 
     let instructions: Vec<IdlInstruction> = raw_instructions
@@ -192,6 +212,59 @@ pub fn build_idl(parsed: ParsedProgram) -> Idl {
         .unzip();
 
     type_defs.extend(event_type_defs);
+
+    // Resolve custom struct types referenced in instruction args
+    let mut referenced: BTreeSet<String> = BTreeSet::new();
+    for ix in &instructions {
+        for arg in &ix.args {
+            collect_defined_refs(&arg.ty, &mut referenced);
+        }
+    }
+
+    let existing_names: HashSet<String> = type_defs.iter().map(|t| t.name.clone()).collect();
+    let data_struct_map: BTreeMap<&str, &[(String, syn::Type)]> = data_structs
+        .iter()
+        .map(|ds| (ds.name.as_str(), ds.fields.as_slice()))
+        .collect();
+
+    let mut to_resolve: Vec<String> = referenced
+        .into_iter()
+        .filter(|n| !existing_names.contains(n))
+        .collect();
+    let mut resolved_names = existing_names;
+
+    while let Some(type_name) = to_resolve.pop() {
+        if resolved_names.contains(&type_name) {
+            continue;
+        }
+        if let Some(fields) = data_struct_map.get(type_name.as_str()) {
+            let idl_fields: Vec<IdlField> = fields
+                .iter()
+                .map(|(name, ty)| IdlField {
+                    name: helpers::to_camel_case(name),
+                    ty: helpers::map_type_from_syn(ty),
+                })
+                .collect();
+
+            // Check for nested Defined types
+            for field in &idl_fields {
+                if let IdlType::Defined { defined } = &field.ty {
+                    if !resolved_names.contains(defined) {
+                        to_resolve.push(defined.clone());
+                    }
+                }
+            }
+
+            resolved_names.insert(type_name.clone());
+            type_defs.push(IdlTypeDef {
+                name: type_name,
+                ty: IdlTypeDefType {
+                    kind: "struct".to_string(),
+                    fields: idl_fields,
+                },
+            });
+        }
+    }
 
     Idl {
         address: program_id,
@@ -329,6 +402,40 @@ fn check_discriminator_collisions(parsed: &ParsedProgram) {
         }
         std::process::exit(1);
     }
+}
+
+fn collect_defined_refs(ty: &IdlType, out: &mut BTreeSet<String>) {
+    match ty {
+        IdlType::Defined { defined } => {
+            out.insert(defined.clone());
+        }
+        IdlType::DynVec { vec } => collect_defined_refs(&vec.items, out),
+        _ => {}
+    }
+}
+
+fn extract_plain_structs(file: &syn::File) -> Vec<RawDataStruct> {
+    let mut result = Vec::new();
+    for item in &file.items {
+        if let syn::Item::Struct(item_struct) = item {
+            let fields = match &item_struct.fields {
+                syn::Fields::Named(named) => named
+                    .named
+                    .iter()
+                    .map(|f| {
+                        let name = f.ident.as_ref().unwrap().to_string();
+                        (name, f.ty.clone())
+                    })
+                    .collect(),
+                _ => continue,
+            };
+            result.push(RawDataStruct {
+                name: item_struct.ident.to_string(),
+                fields,
+            });
+        }
+    }
+    result
 }
 
 fn read_cargo_name(crate_root: &Path) -> Option<String> {

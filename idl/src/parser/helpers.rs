@@ -79,6 +79,20 @@ pub fn map_type_from_syn(ty: &syn::Type) -> IdlType {
         other => other,
     };
 
+    // Handle fixed-size arrays: [T; N]
+    if let syn::Type::Array(arr) = inner {
+        if let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(lit_int),
+            ..
+        }) = &arr.len
+        {
+            if let Ok(n) = lit_int.base10_parse::<usize>() {
+                let elem_name = simple_type_name(&arr.elem);
+                return IdlType::Primitive(format!("[{}; {}]", elem_name, n));
+            }
+        }
+    }
+
     if let syn::Type::Path(type_path) = inner {
         if let Some(seg) = type_path.path.segments.last() {
             if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {

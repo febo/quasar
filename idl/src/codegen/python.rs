@@ -1,5 +1,5 @@
 use {
-    crate::types::{Idl, IdlType},
+    crate::types::{Idl, IdlType, IdlTypeDef},
     std::fmt::Write,
 };
 
@@ -131,7 +131,12 @@ pub fn generate_python_client(idl: &Idl) -> String {
             .unwrap();
             out.push_str("        offset = 0\n");
             for field in &type_def.ty.fields {
-                out.push_str(&decode_field_expr(&to_snake(&field.name), &field.ty, 8));
+                out.push_str(&decode_field_expr(
+                    &to_snake(&field.name),
+                    &field.ty,
+                    8,
+                    &idl.types,
+                ));
             }
             let field_names: Vec<String> = type_def
                 .ty
@@ -244,7 +249,11 @@ pub fn generate_python_client(idl: &Idl) -> String {
         } else {
             writeln!(out, "    data = bytearray({}_DISCRIMINATOR)", const_name).unwrap();
             for arg in &ix.args {
-                out.push_str(&serialize_field_expr(&to_snake(&arg.name), &arg.ty));
+                out.push_str(&serialize_field_expr(
+                    &to_snake(&arg.name),
+                    &arg.ty,
+                    &idl.types,
+                ));
             }
             out.push_str("    data = bytes(data)\n");
         }
@@ -327,20 +336,23 @@ pub fn generate_python_client(idl: &Idl) -> String {
 // Type mapping
 // ---------------------------------------------------------------------------
 
-fn python_type(ty: &IdlType) -> &'static str {
+fn python_type(ty: &IdlType) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
-            "bool" => "bool",
-            "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" => "int",
-            "f32" | "f64" => "float",
-            "publicKey" => "Pubkey",
-            "string" => "str",
-            _ => "bytes",
+            "bool" => "bool".to_string(),
+            "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" => {
+                "int".to_string()
+            }
+            "f32" | "f64" => "float".to_string(),
+            "publicKey" => "Pubkey".to_string(),
+            "string" => "str".to_string(),
+            _ if p.starts_with('[') => "bytes".to_string(),
+            _ => "bytes".to_string(),
         },
-        IdlType::DynString { .. } => "str",
-        IdlType::DynVec { .. } => "list",
-        IdlType::Defined { .. } => "bytes",
-        IdlType::Tail { .. } => "bytes",
+        IdlType::DynString { .. } => "str".to_string(),
+        IdlType::DynVec { .. } => "list".to_string(),
+        IdlType::Defined { defined } => defined.clone(),
+        IdlType::Tail { .. } => "bytes".to_string(),
     }
 }
 
@@ -348,7 +360,7 @@ fn python_type(ty: &IdlType) -> &'static str {
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
-fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
+fn serialize_field_expr(name: &str, ty: &IdlType, types: &[IdlTypeDef]) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => format!("    data += struct.pack(\"<?\", input.{})\n", name),
@@ -371,6 +383,9 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
             "f32" => format!("    data += struct.pack(\"<f\", input.{})\n", name),
             "f64" => format!("    data += struct.pack(\"<d\", input.{})\n", name),
             "publicKey" => format!("    data += bytes(input.{})\n", name),
+            _ if p.starts_with('[') => {
+                format!("    data += input.{}\n", name)
+            }
             _ => format!("    data += input.{}  # unsupported\n", name),
         },
         IdlType::DynString { .. } => {
@@ -396,8 +411,20 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
                 ser = item_ser,
             )
         }
-        IdlType::Defined { .. } => {
-            format!("    data += input.{}\n", name)
+        IdlType::Defined { defined } => {
+            if let Some(td) = types.iter().find(|t| t.name == *defined) {
+                let mut result = String::new();
+                for field in &td.ty.fields {
+                    result.push_str(&serialize_field_expr(
+                        &format!("{}.{}", name, to_snake(&field.name)),
+                        &field.ty,
+                        types,
+                    ));
+                }
+                result
+            } else {
+                format!("    data += input.{}  # unknown type\n", name)
+            }
         }
         IdlType::Tail { .. } => {
             format!("    data += input.{}\n", name)
@@ -405,7 +432,7 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
     }
 }
 
-fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
+fn decode_field_expr(name: &str, ty: &IdlType, indent: usize, types: &[IdlTypeDef]) -> String {
     let pad = " ".repeat(indent);
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
@@ -441,6 +468,15 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
                 pad = pad,
                 n = name,
             ),
+            other if other.starts_with('[') => {
+                let size = parse_fixed_array_size(other).unwrap_or(0);
+                format!(
+                    "{pad}{n} = data[offset:offset + {sz}]\n{pad}offset += {sz}\n",
+                    pad = pad,
+                    n = name,
+                    sz = size,
+                )
+            }
             other => {
                 let fmt = struct_format(other);
                 let size = primitive_size(other);
@@ -487,12 +523,54 @@ fn decode_field_expr(name: &str, ty: &IdlType, indent: usize) -> String {
                 decode = item_decode,
             )
         }
-        IdlType::Defined { .. } | IdlType::Tail { .. } => format!(
+        IdlType::Defined { defined } => {
+            if let Some(td) = types.iter().find(|t| t.name == *defined) {
+                let mut result = String::new();
+                for field in &td.ty.fields {
+                    result.push_str(&decode_field_expr(
+                        &format!("_{}", to_snake(&field.name)),
+                        &field.ty,
+                        indent,
+                        types,
+                    ));
+                }
+                let field_names: Vec<String> = td
+                    .ty
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let snake = to_snake(&f.name);
+                        format!("{}=_{}", snake, snake)
+                    })
+                    .collect();
+                result.push_str(&format!(
+                    "{pad}{n} = {cls}({args})\n",
+                    pad = pad,
+                    n = name,
+                    cls = defined,
+                    args = field_names.join(", "),
+                ));
+                result
+            } else {
+                format!(
+                    "{pad}{n} = data[offset:]  # unknown type\n",
+                    pad = pad,
+                    n = name,
+                )
+            }
+        }
+        IdlType::Tail { .. } => format!(
             "{pad}{n} = data[offset:]  # remaining bytes\n",
             pad = pad,
             n = name,
         ),
     }
+}
+
+fn parse_fixed_array_size(p: &str) -> Option<usize> {
+    let inner = p.strip_prefix('[')?.strip_suffix(']')?;
+    let (_, size_str) = inner.split_once(';')?;
+    size_str.trim().parse().ok()
 }
 
 fn struct_format(primitive: &str) -> &'static str {

@@ -1,5 +1,5 @@
 use {
-    crate::types::{Idl, IdlType},
+    crate::types::{Idl, IdlType, IdlTypeDef},
     std::fmt::Write,
 };
 
@@ -115,7 +115,12 @@ pub fn generate_go_client(idl: &Idl) -> String {
             .unwrap();
             out.push_str("\toffset := 0\n");
             for field in &type_def.ty.fields {
-                out.push_str(&decode_field_expr(&to_camel(&field.name), &field.ty, 1));
+                out.push_str(&decode_field_expr(
+                    &to_camel(&field.name),
+                    &field.ty,
+                    1,
+                    &idl.types,
+                ));
             }
             let field_assigns: Vec<String> = type_def
                 .ty
@@ -209,7 +214,11 @@ pub fn generate_go_client(idl: &Idl) -> String {
             writeln!(out, "\tdata := make([]byte, 0, 256)").unwrap();
             writeln!(out, "\tdata = append(data, {}[:]...)", disc_var).unwrap();
             for arg in &ix.args {
-                out.push_str(&serialize_field_expr(&to_pascal(&arg.name), &arg.ty));
+                out.push_str(&serialize_field_expr(
+                    &to_pascal(&arg.name),
+                    &arg.ty,
+                    &idl.types,
+                ));
             }
         }
 
@@ -285,30 +294,34 @@ require github.com/gagliardetto/solana-go v1.12.0
 // Type mapping
 // ---------------------------------------------------------------------------
 
-fn go_type(ty: &IdlType) -> &'static str {
+fn go_type(ty: &IdlType) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
-            "bool" => "bool",
-            "u8" => "uint8",
-            "i8" => "int8",
-            "u16" => "uint16",
-            "i16" => "int16",
-            "u32" => "uint32",
-            "i32" => "int32",
-            "u64" => "uint64",
-            "i64" => "int64",
-            "u128" => "[16]byte",
-            "i128" => "[16]byte",
-            "f32" => "float32",
-            "f64" => "float64",
-            "publicKey" => "solana.PublicKey",
-            "string" => "string",
-            _ => "[]byte",
+            "bool" => "bool".to_string(),
+            "u8" => "uint8".to_string(),
+            "i8" => "int8".to_string(),
+            "u16" => "uint16".to_string(),
+            "i16" => "int16".to_string(),
+            "u32" => "uint32".to_string(),
+            "i32" => "int32".to_string(),
+            "u64" => "uint64".to_string(),
+            "i64" => "int64".to_string(),
+            "u128" => "[16]byte".to_string(),
+            "i128" => "[16]byte".to_string(),
+            "f32" => "float32".to_string(),
+            "f64" => "float64".to_string(),
+            "publicKey" => "solana.PublicKey".to_string(),
+            "string" => "string".to_string(),
+            other if other.starts_with('[') => {
+                let size = parse_fixed_array_size(other).unwrap_or(0);
+                format!("[{}]byte", size)
+            }
+            _ => "[]byte".to_string(),
         },
-        IdlType::DynString { .. } => "string",
-        IdlType::DynVec { .. } => "[]byte", // simplified — callers handle generics
-        IdlType::Defined { .. } => "[]byte",
-        IdlType::Tail { .. } => "[]byte",
+        IdlType::DynString { .. } => "string".to_string(),
+        IdlType::DynVec { .. } => "[]byte".to_string(),
+        IdlType::Defined { defined } => defined.clone(),
+        IdlType::Tail { .. } => "[]byte".to_string(),
     }
 }
 
@@ -331,7 +344,7 @@ fn account_meta_expr(key_expr: &str, signer: bool, writable: bool) -> String {
 // Serialization
 // ---------------------------------------------------------------------------
 
-fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
+fn serialize_field_expr(name: &str, ty: &IdlType, types: &[IdlTypeDef]) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => format!(
@@ -389,6 +402,9 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
                  buf[:]...); data = append(data, b...) }}\n",
                 n = name,
             ),
+            _ if p.starts_with('[') => {
+                format!("\tdata = append(data, input.{}[:]...)\n", name)
+            }
             _ => format!("\tdata = append(data, input.{}...)\n", name),
         },
         IdlType::DynString { .. } => format!(
@@ -396,7 +412,22 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
              uint32(len(b))); data = append(data, buf[:]...); data = append(data, b...) }}\n",
             n = name,
         ),
-        IdlType::DynVec { .. } | IdlType::Defined { .. } | IdlType::Tail { .. } => {
+        IdlType::Defined { defined } => {
+            if let Some(td) = types.iter().find(|t| t.name == *defined) {
+                let mut result = String::new();
+                for field in &td.ty.fields {
+                    result.push_str(&serialize_field_expr(
+                        &format!("{}.{}", name, to_pascal(&field.name)),
+                        &field.ty,
+                        types,
+                    ));
+                }
+                result
+            } else {
+                format!("\tdata = append(data, input.{}...)\n", name)
+            }
+        }
+        IdlType::DynVec { .. } | IdlType::Tail { .. } => {
             format!("\tdata = append(data, input.{}...)\n", name,)
         }
     }
@@ -406,7 +437,7 @@ fn serialize_field_expr(name: &str, ty: &IdlType) -> String {
 // Deserialization
 // ---------------------------------------------------------------------------
 
-fn decode_field_expr(name: &str, ty: &IdlType, depth: usize) -> String {
+fn decode_field_expr(name: &str, ty: &IdlType, depth: usize, types: &[IdlTypeDef]) -> String {
     let t = "\t".repeat(depth);
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
@@ -474,6 +505,16 @@ fn decode_field_expr(name: &str, ty: &IdlType, depth: usize) -> String {
                 t = t,
                 n = name,
             ),
+            _ if p.starts_with('[') => {
+                let size = parse_fixed_array_size(p).unwrap_or(0);
+                format!(
+                    "{t}var {n} [{sz}]byte\n{t}copy({n}[:], data[offset:offset+{sz}])\n{t}offset \
+                     += {sz}\n",
+                    t = t,
+                    n = name,
+                    sz = size,
+                )
+            }
             _ => format!(
                 "{t}{n} := data[offset:] // unsupported type\n{t}_ = {n}\n",
                 t = t,
@@ -486,12 +527,54 @@ fn decode_field_expr(name: &str, ty: &IdlType, depth: usize) -> String {
             t = t,
             n = name,
         ),
-        IdlType::DynVec { .. } | IdlType::Defined { .. } | IdlType::Tail { .. } => format!(
+        IdlType::Defined { defined } => {
+            if let Some(td) = types.iter().find(|t| t.name == *defined) {
+                let mut result = String::new();
+                for field in &td.ty.fields {
+                    result.push_str(&decode_field_expr(
+                        &to_camel(&field.name),
+                        &field.ty,
+                        depth,
+                        types,
+                    ));
+                }
+                let field_assigns: Vec<String> = td
+                    .ty
+                    .fields
+                    .iter()
+                    .map(|f| format!("{}: {},", to_pascal(&f.name), to_camel(&f.name)))
+                    .collect();
+                result.push_str(&format!(
+                    "{t}{n} := {cls}{{\n",
+                    t = t,
+                    n = name,
+                    cls = defined
+                ));
+                for a in &field_assigns {
+                    result.push_str(&format!("{t}\t{a}\n", t = t, a = a));
+                }
+                result.push_str(&format!("{t}}}\n", t = t));
+                result
+            } else {
+                format!(
+                    "{t}{n} := data[offset:] // unknown type\n{t}_ = {n}\n",
+                    t = t,
+                    n = name,
+                )
+            }
+        }
+        IdlType::DynVec { .. } | IdlType::Tail { .. } => format!(
             "{t}{n} := data[offset:] // remaining bytes\n{t}_ = {n}\n",
             t = t,
             n = name,
         ),
     }
+}
+
+fn parse_fixed_array_size(p: &str) -> Option<usize> {
+    let inner = p.strip_prefix('[')?.strip_suffix(']')?;
+    let (_, size_str) = inner.split_once(';')?;
+    size_str.trim().parse().ok()
 }
 
 // ---------------------------------------------------------------------------

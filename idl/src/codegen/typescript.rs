@@ -109,6 +109,11 @@ fn generate_ts(idl: &Idl, target: TsTarget) -> String {
         codec_imports.extend_from_slice(&["getBytesCodec", "fixCodecSize", "transformCodec"]);
     }
 
+    let has_fixed_array = used.iter().any(|u| u.starts_with('['));
+    if has_fixed_array {
+        codec_imports.extend_from_slice(&["fixCodecSize", "getBytesCodec"]);
+    }
+
     if has_tail {
         codec_imports.push("getBytesCodec");
     }
@@ -822,6 +827,7 @@ fn ts_type(ty: &IdlType) -> String {
             "u64" | "u128" | "i64" | "i128" => "bigint".to_string(),
             "bool" => "boolean".to_string(),
             "publicKey" => "Address".to_string(),
+            other if other.starts_with('[') => "Uint8Array".to_string(),
             other => other.to_string(),
         },
         IdlType::Defined { defined } => defined.clone(),
@@ -852,6 +858,10 @@ fn ts_codec(ty: &IdlType, target: TsTarget) -> String {
                 TsTarget::Web3js => "getPublicKeyCodec()".to_string(),
                 TsTarget::Kit => "getAddressCodec()".to_string(),
             },
+            other if other.starts_with('[') => {
+                let size = parse_fixed_array_size(other).unwrap_or(0);
+                format!("fixCodecSize(getBytesCodec(), {})", size)
+            }
             other => format!("/* unknown: {} */", other),
         },
         IdlType::Defined { defined } => format!("{}Codec", defined),
@@ -904,6 +914,13 @@ fn visit_type(ty: &IdlType, visit: &mut impl FnMut(&IdlType)) {
     if let IdlType::DynVec { vec } = ty {
         visit_type(&vec.items, visit);
     }
+}
+
+/// Parse the size from a fixed-size array primitive like "[u8; 8]" → 8.
+fn parse_fixed_array_size(p: &str) -> Option<usize> {
+    let inner = p.strip_prefix('[')?.strip_suffix(']')?;
+    let (_, size_str) = inner.split_once(';')?;
+    size_str.trim().parse().ok()
 }
 
 fn snake_to_pascal(s: &str) -> String {

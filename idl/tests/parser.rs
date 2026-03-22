@@ -307,6 +307,7 @@ fn no_collision_different_kinds() {
         }],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
     // Should not panic
     let idl = quasar_idl::parser::build_idl(parsed);
@@ -366,6 +367,7 @@ fn build_idl_full_pipeline() {
         state_accounts,
         events: evts,
         errors: errs,
+        data_structs: vec![],
     };
 
     let idl = quasar_idl::parser::build_idl(parsed);
@@ -426,6 +428,7 @@ fn collision_two_instructions_same_discriminator() {
         state_accounts: vec![],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let collisions = find_discriminator_collisions(&parsed);
@@ -459,6 +462,7 @@ fn collision_two_accounts_same_discriminator() {
         ],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let collisions = find_discriminator_collisions(&parsed);
@@ -492,6 +496,7 @@ fn collision_two_events_same_discriminator() {
             },
         ],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let collisions = find_discriminator_collisions(&parsed);
@@ -528,6 +533,7 @@ fn no_collision_same_disc_different_kinds() {
             fields: vec![],
         }],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let collisions = find_discriminator_collisions(&parsed);
@@ -573,6 +579,7 @@ fn collision_three_instructions_pairwise() {
         state_accounts: vec![],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let collisions = find_discriminator_collisions(&parsed);
@@ -611,6 +618,7 @@ fn rust_codegen_events() {
         state_accounts: vec![],
         events: evts,
         errors: vec![],
+        data_structs: vec![],
     };
 
     let code = generate_client(&parsed);
@@ -707,6 +715,7 @@ fn rust_codegen_remaining_accounts() {
         state_accounts: vec![],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let code = generate_client(&parsed);
@@ -757,6 +766,7 @@ fn ts_codegen_remaining_accounts() {
         state_accounts: vec![],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let idl = build_idl(parsed);
@@ -805,6 +815,7 @@ fn idl_json_has_remaining_serialization() {
         state_accounts: vec![],
         events: vec![],
         errors: vec![],
+        data_structs: vec![],
     };
 
     let idl = build_idl(parsed);

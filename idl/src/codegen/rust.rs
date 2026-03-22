@@ -3,7 +3,7 @@ use {
         parser::{accounts::RawAccountField, helpers, ParsedProgram},
         types::IdlType,
     },
-    std::fmt::Write,
+    std::{collections::HashMap, fmt::Write},
 };
 
 /// Generate Cargo.toml content for the standalone client crate.
@@ -52,6 +52,65 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
         parsed.program_id
     )
     .expect("write to String");
+
+    // Build type map for custom data types referenced in instruction args
+    let type_map: HashMap<String, Vec<(String, IdlType)>> = {
+        let mut map = HashMap::new();
+
+        let mut referenced = std::collections::BTreeSet::new();
+        for ix in &parsed.instructions {
+            for (_, ty) in &ix.args {
+                let idl_ty = helpers::map_type_from_syn(ty);
+                collect_defined_refs(&idl_ty, &mut referenced);
+            }
+        }
+
+        let struct_map: HashMap<&str, &[(String, syn::Type)]> = parsed
+            .data_structs
+            .iter()
+            .map(|ds| (ds.name.as_str(), ds.fields.as_slice()))
+            .collect();
+
+        let mut to_resolve: Vec<String> = referenced.into_iter().collect();
+        let mut resolved = std::collections::HashSet::new();
+
+        while let Some(name) = to_resolve.pop() {
+            if resolved.contains(&name) {
+                continue;
+            }
+            if let Some(fields) = struct_map.get(name.as_str()) {
+                let idl_fields: Vec<(String, IdlType)> = fields
+                    .iter()
+                    .map(|(fname, fty)| (fname.clone(), helpers::map_type_from_syn(fty)))
+                    .collect();
+                for (_, fty) in &idl_fields {
+                    if let IdlType::Defined { defined } = fty {
+                        if !resolved.contains(defined) {
+                            to_resolve.push(defined.clone());
+                        }
+                    }
+                }
+                resolved.insert(name.clone());
+                map.insert(name, idl_fields);
+            }
+        }
+        map
+    };
+
+    // --- Custom data type definitions ---
+    for (type_name, fields) in &type_map {
+        writeln!(out, "pub struct {} {{", type_name).expect("write to String");
+        for (field_name, field_ty) in fields {
+            writeln!(
+                out,
+                "    pub {}: {},",
+                field_name,
+                rust_field_type(field_ty)
+            )
+            .expect("write to String");
+        }
+        out.push_str("}\n\n");
+    }
 
     for ix in &parsed.instructions {
         let accounts_struct = parsed
@@ -129,7 +188,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
         } else {
             writeln!(out, "        let mut data = vec![{}];", disc_str).expect("write to String");
             for (i, (name, _)) in ix.args.iter().enumerate() {
-                out.push_str(&serialize_expr(name, &arg_types[i]));
+                out.push_str(&serialize_expr(name, &arg_types[i], &type_map));
             }
         }
 
@@ -262,7 +321,11 @@ fn rust_field_type(ty: &IdlType) -> String {
 }
 
 /// Generate serialization code for an instruction argument.
-fn serialize_expr(name: &str, ty: &IdlType) -> String {
+fn serialize_expr(
+    name: &str,
+    ty: &IdlType,
+    types: &HashMap<String, Vec<(String, IdlType)>>,
+) -> String {
     match ty {
         IdlType::Primitive(p) => match p.as_str() {
             "bool" => format!("        data.push(ix.{} as u8);\n", name),
@@ -270,6 +333,9 @@ fn serialize_expr(name: &str, ty: &IdlType) -> String {
             "i8" => format!("        data.push(ix.{} as u8);\n", name),
             "publicKey" => {
                 format!("        data.extend_from_slice(ix.{}.as_ref());\n", name)
+            }
+            other if other.starts_with('[') => {
+                format!("        data.extend_from_slice(&ix.{});\n", name)
             }
             _ => format!(
                 "        data.extend_from_slice(&ix.{}.to_le_bytes());\n",
@@ -299,13 +365,34 @@ fn serialize_expr(name: &str, ty: &IdlType) -> String {
                 ser = item_ser,
             )
         }
-        IdlType::Defined { .. } => format!(
-            "        data.extend_from_slice(&ix.{}.to_le_bytes());\n",
-            name
-        ),
+        IdlType::Defined { defined } => {
+            if let Some(fields) = types.get(defined.as_str()) {
+                let mut result = String::new();
+                for (field_name, field_ty) in fields {
+                    result.push_str(&serialize_expr(
+                        &format!("{}.{}", name, field_name),
+                        field_ty,
+                        types,
+                    ));
+                }
+                result
+            } else {
+                format!("        // unknown type: {}\n", defined)
+            }
+        }
         IdlType::Tail { .. } => {
             format!("        data.extend_from_slice(&ix.{});\n", name)
         }
+    }
+}
+
+fn collect_defined_refs(ty: &IdlType, out: &mut std::collections::BTreeSet<String>) {
+    match ty {
+        IdlType::Defined { defined } => {
+            out.insert(defined.clone());
+        }
+        IdlType::DynVec { vec } => collect_defined_refs(&vec.items, out),
+        _ => {}
     }
 }
 
@@ -331,6 +418,16 @@ fn deserialize_field_expr(name: &str, ty: &IdlType) -> String {
                  32]).ok()?);\n\x20       offset += 32;\n",
                 n = name,
             ),
+            other if other.starts_with('[') => {
+                let size = parse_fixed_array_size(other).unwrap_or(0);
+                format!(
+                    "        let {n}: {ty} = data[offset..offset + {sz}].try_into().ok()?;\n\
+                     \x20       offset += {sz};\n",
+                    n = name,
+                    ty = other,
+                    sz = size,
+                )
+            }
             other => {
                 let size = primitive_size(other);
                 format!(
@@ -382,6 +479,13 @@ fn pascal_to_screaming_snake(s: &str) -> String {
         result.push(c.to_ascii_uppercase());
     }
     result
+}
+
+/// Parse the size from a fixed-size array primitive like "[u8; 8]" → 8.
+fn parse_fixed_array_size(p: &str) -> Option<usize> {
+    let inner = p.strip_prefix('[')?.strip_suffix(']')?;
+    let (_, size_str) = inner.split_once(';')?;
+    size_str.trim().parse().ok()
 }
 
 fn snake_to_pascal(s: &str) -> String {

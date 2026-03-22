@@ -78,10 +78,17 @@ pub struct InitCommand {
     #[arg(long, action = ArgAction::SetTrue)]
     pub no_git: bool,
 
-    /// Testing framework (none, mollusk, quasarsvm-rust, quasarsvm-web3js,
-    /// quasarsvm-kit)
+    /// Test language (none, rust, typescript)
     #[arg(long)]
-    pub framework: Option<String>,
+    pub test_language: Option<String>,
+
+    /// Rust test framework (quasar-svm, mollusk)
+    #[arg(long)]
+    pub rust_framework: Option<String>,
+
+    /// TypeScript SDK (kit, web3.js)
+    #[arg(long)]
+    pub ts_sdk: Option<String>,
 
     /// Project template (minimal, full)
     #[arg(long)]
@@ -286,7 +293,9 @@ pub fn run(cli: Cli) -> CliResult {
             cmd.name,
             cmd.yes,
             cmd.no_git,
-            cmd.framework,
+            cmd.test_language,
+            cmd.rust_framework,
+            cmd.ts_sdk,
             cmd.template,
             cmd.toolchain,
         ),

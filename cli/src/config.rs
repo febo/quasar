@@ -13,6 +13,8 @@ pub struct QuasarConfig {
     pub project: ProjectConfig,
     pub toolchain: ToolchainConfig,
     pub testing: TestingConfig,
+    #[serde(default)]
+    pub clients: Option<ClientsConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +30,30 @@ pub struct ToolchainConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct TestingConfig {
+    pub language: String,
+    #[serde(default)]
+    pub rust: Option<RustTestingConfig>,
+    #[serde(default)]
+    pub typescript: Option<TypeScriptTestingConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RustTestingConfig {
     pub framework: String,
+    pub test: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TypeScriptTestingConfig {
+    pub framework: String,
+    pub sdk: String,
+    pub install: String,
+    pub test: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClientsConfig {
+    pub languages: Vec<String>,
 }
 
 impl QuasarConfig {
@@ -78,17 +103,25 @@ impl QuasarConfig {
     }
 
     pub fn has_typescript_tests(&self) -> bool {
-        matches!(
-            self.testing.framework.as_str(),
-            "quasarsvm-web3js" | "quasarsvm-kit"
-        )
+        self.testing.language == "typescript"
     }
 
     pub fn has_rust_tests(&self) -> bool {
-        matches!(
-            self.testing.framework.as_str(),
-            "mollusk" | "quasarsvm-rust"
-        )
+        self.testing.language == "rust"
+    }
+
+    pub fn client_languages(&self) -> Vec<&str> {
+        match self.clients {
+            Some(ref c) => c.languages.iter().map(|s| s.as_str()).collect(),
+            None => {
+                // Backward compat: infer from testing framework
+                let mut langs = vec!["rust"];
+                if self.has_typescript_tests() {
+                    langs.push("typescript");
+                }
+                langs
+            }
+        }
     }
 }
 
@@ -107,9 +140,12 @@ pub struct GlobalConfig {
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct GlobalDefaults {
     pub toolchain: Option<String>,
-    pub framework: Option<String>,
+    pub test_language: Option<String>,
+    pub rust_framework: Option<String>,
+    pub ts_sdk: Option<String>,
     pub template: Option<String>,
     pub git: Option<String>,
+    pub package_manager: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -211,9 +247,12 @@ mod tests {
         let saved = GlobalConfig {
             defaults: GlobalDefaults {
                 toolchain: Some("solana".into()),
-                framework: Some("quasarsvm-rust".into()),
+                test_language: Some("rust".into()),
+                rust_framework: Some("quasar-svm".into()),
+                ts_sdk: None,
                 template: Some("minimal".into()),
                 git: Some("commit".into()),
+                package_manager: None,
             },
             ui: UiConfig {
                 animation: false,

@@ -20,7 +20,8 @@ fn run_once(debug: bool, features: Option<&str>) -> CliResult {
     let config = QuasarConfig::load()?;
     let start = Instant::now();
 
-    crate::idl::generate(Path::new("."), config.has_typescript_tests())?;
+    let languages = config.client_languages();
+    crate::idl::generate(Path::new("."), &languages)?;
 
     let sp = style::spinner("Building...");
 
@@ -139,7 +140,8 @@ pub fn profile_build() -> Result<PathBuf, crate::error::CliError> {
     let config = QuasarConfig::load()?;
     let start = Instant::now();
 
-    crate::idl::generate(Path::new("."), config.has_typescript_tests())?;
+    let languages = config.client_languages();
+    crate::idl::generate(Path::new("."), &languages)?;
 
     let sp = style::spinner("Profile build...");
 

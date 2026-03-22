@@ -69,8 +69,24 @@ fn print_all(config: &GlobalConfig) {
         config.defaults.toolchain.as_deref().unwrap_or("(not set)")
     );
     println!(
-        "    framework  = {}",
-        config.defaults.framework.as_deref().unwrap_or("(not set)")
+        "    test_language    = {}",
+        config
+            .defaults
+            .test_language
+            .as_deref()
+            .unwrap_or("(not set)")
+    );
+    println!(
+        "    rust_framework  = {}",
+        config
+            .defaults
+            .rust_framework
+            .as_deref()
+            .unwrap_or("(not set)")
+    );
+    println!(
+        "    ts_sdk          = {}",
+        config.defaults.ts_sdk.as_deref().unwrap_or("(not set)")
     );
     println!(
         "    template   = {}",
@@ -108,15 +124,19 @@ const ITEMS: &[ConfigItem] = &[
         kind: ConfigKind::Choice(&["solana", "upstream"]),
     },
     ConfigItem {
-        key: "defaults.framework",
-        label: "Default test framework",
-        kind: ConfigKind::Choice(&[
-            "none",
-            "mollusk",
-            "quasarsvm-rust",
-            "quasarsvm-web3js",
-            "quasarsvm-kit",
-        ]),
+        key: "defaults.test_language",
+        label: "Default test language",
+        kind: ConfigKind::Choice(&["none", "rust", "typescript"]),
+    },
+    ConfigItem {
+        key: "defaults.rust_framework",
+        label: "Rust test framework",
+        kind: ConfigKind::Choice(&["quasar-svm", "mollusk"]),
+    },
+    ConfigItem {
+        key: "defaults.ts_sdk",
+        label: "TypeScript SDK",
+        kind: ConfigKind::Choice(&["kit", "web3.js"]),
     },
     ConfigItem {
         key: "defaults.template",
@@ -250,10 +270,26 @@ fn get_value(config: &GlobalConfig, key: &str) -> Option<String> {
                 .unwrap_or("(not set)")
                 .to_string(),
         ),
-        "defaults.framework" => Some(
+        "defaults.test_language" => Some(
             config
                 .defaults
-                .framework
+                .test_language
+                .as_deref()
+                .unwrap_or("(not set)")
+                .to_string(),
+        ),
+        "defaults.rust_framework" => Some(
+            config
+                .defaults
+                .rust_framework
+                .as_deref()
+                .unwrap_or("(not set)")
+                .to_string(),
+        ),
+        "defaults.ts_sdk" => Some(
+            config
+                .defaults
+                .ts_sdk
                 .as_deref()
                 .unwrap_or("(not set)")
                 .to_string(),
@@ -283,7 +319,9 @@ fn get_value(config: &GlobalConfig, key: &str) -> Option<String> {
 fn set_value(config: &mut GlobalConfig, key: &str, value: &str) -> bool {
     match key {
         "defaults.toolchain" => config.defaults.toolchain = some_or_none(value),
-        "defaults.framework" => config.defaults.framework = some_or_none(value),
+        "defaults.test_language" => config.defaults.test_language = some_or_none(value),
+        "defaults.rust_framework" => config.defaults.rust_framework = some_or_none(value),
+        "defaults.ts_sdk" => config.defaults.ts_sdk = some_or_none(value),
         "defaults.template" => config.defaults.template = some_or_none(value),
         "defaults.git" => config.defaults.git = some_or_none(value),
         "ui.animation" => config.ui.animation = parse_bool(value),
@@ -303,20 +341,25 @@ fn validate_value(key: &str, value: &str) -> Result<(), &'static str> {
                 Err("solana, upstream")
             }
         }
-        "defaults.framework" => {
-            if matches!(
-                value,
-                "none"
-                    | "mollusk"
-                    | "quasarsvm-rust"
-                    | "quasarsvm-web3js"
-                    | "quasarsvm-kit"
-                    | "null"
-                    | ""
-            ) {
+        "defaults.test_language" => {
+            if matches!(value, "none" | "rust" | "typescript" | "null" | "") {
                 Ok(())
             } else {
-                Err("none, mollusk, quasarsvm-rust, quasarsvm-web3js, quasarsvm-kit")
+                Err("none, rust, typescript")
+            }
+        }
+        "defaults.rust_framework" => {
+            if matches!(value, "quasar-svm" | "mollusk" | "none" | "null" | "") {
+                Ok(())
+            } else {
+                Err("quasar-svm, mollusk")
+            }
+        }
+        "defaults.ts_sdk" => {
+            if matches!(value, "kit" | "web3.js" | "none" | "null" | "") {
+                Ok(())
+            } else {
+                Err("kit, web3.js")
             }
         }
         "defaults.template" => {

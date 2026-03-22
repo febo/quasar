@@ -4,7 +4,7 @@ use {
         error::CliResult,
         toolchain,
     },
-    dialoguer::{theme::ColorfulTheme, Input, Select},
+    dialoguer::{theme::ColorfulTheme, Input, MultiSelect, Select},
     serde::Serialize,
     std::{fmt, fs, path::Path, process::Command},
 };
@@ -29,36 +29,48 @@ impl fmt::Display for Toolchain {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Framework {
+enum TestLanguage {
     None,
-    Mollusk,
-    QuasarSVMWeb3js,
-    QuasarSVMKit,
-    QuasarSVMRust,
+    Rust,
+    TypeScript,
 }
 
-impl Framework {
-    fn has_typescript(&self) -> bool {
-        matches!(self, Framework::QuasarSVMWeb3js | Framework::QuasarSVMKit)
-    }
-
-    fn is_kit(&self) -> bool {
-        matches!(self, Framework::QuasarSVMKit)
-    }
-
-    fn has_rust_tests(&self) -> bool {
-        matches!(self, Framework::Mollusk | Framework::QuasarSVMRust)
-    }
-}
-
-impl fmt::Display for Framework {
+impl fmt::Display for TestLanguage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Framework::None => write!(f, "none"),
-            Framework::Mollusk => write!(f, "mollusk"),
-            Framework::QuasarSVMWeb3js => write!(f, "quasarsvm-web3js"),
-            Framework::QuasarSVMKit => write!(f, "quasarsvm-kit"),
-            Framework::QuasarSVMRust => write!(f, "quasarsvm-rust"),
+            TestLanguage::None => write!(f, "none"),
+            TestLanguage::Rust => write!(f, "rust"),
+            TestLanguage::TypeScript => write!(f, "typescript"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RustFramework {
+    QuasarSVM,
+    Mollusk,
+}
+
+impl fmt::Display for RustFramework {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RustFramework::QuasarSVM => write!(f, "quasar-svm"),
+            RustFramework::Mollusk => write!(f, "mollusk"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TypeScriptSdk {
+    Kit,
+    Web3js,
+}
+
+impl fmt::Display for TypeScriptSdk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeScriptSdk::Kit => write!(f, "kit"),
+            TypeScriptSdk::Web3js => write!(f, "web3.js"),
         }
     }
 }
@@ -137,6 +149,58 @@ impl fmt::Display for GitSetup {
     }
 }
 
+#[derive(Debug, Clone)]
+enum PackageManager {
+    Pnpm,
+    Bun,
+    Npm,
+    Yarn,
+    Other { install: String, test: String },
+}
+
+impl PackageManager {
+    fn install_cmd(&self) -> &str {
+        match self {
+            PackageManager::Pnpm => "pnpm install",
+            PackageManager::Bun => "bun install",
+            PackageManager::Npm => "npm install",
+            PackageManager::Yarn => "yarn install",
+            PackageManager::Other { install, .. } => install,
+        }
+    }
+
+    fn test_cmd(&self) -> &str {
+        match self {
+            PackageManager::Pnpm => "pnpm test",
+            PackageManager::Bun => "bun test",
+            PackageManager::Npm => "npm test",
+            PackageManager::Yarn => "yarn test",
+            PackageManager::Other { test, .. } => test,
+        }
+    }
+
+    fn from_config(value: Option<&str>) -> usize {
+        match value {
+            Some("bun") => 1,
+            Some("npm") => 2,
+            Some("yarn") => 3,
+            _ => 0, // pnpm default
+        }
+    }
+}
+
+impl fmt::Display for PackageManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PackageManager::Pnpm => write!(f, "pnpm"),
+            PackageManager::Bun => write!(f, "bun"),
+            PackageManager::Npm => write!(f, "npm"),
+            PackageManager::Yarn => write!(f, "yarn"),
+            PackageManager::Other { .. } => write!(f, "other"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Quasar.toml schema
 // ---------------------------------------------------------------------------
@@ -146,6 +210,7 @@ struct QuasarToml {
     project: QuasarProject,
     toolchain: QuasarToolchain,
     testing: QuasarTesting,
+    clients: QuasarClients,
 }
 
 #[derive(Serialize)]
@@ -161,7 +226,30 @@ struct QuasarToolchain {
 
 #[derive(Serialize)]
 struct QuasarTesting {
+    language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rust: Option<QuasarRustTesting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typescript: Option<QuasarTypeScriptTesting>,
+}
+
+#[derive(Serialize)]
+struct QuasarRustTesting {
     framework: String,
+    test: String,
+}
+
+#[derive(Serialize)]
+struct QuasarTypeScriptTesting {
+    framework: String,
+    sdk: String,
+    install: String,
+    test: String,
+}
+
+#[derive(Serialize)]
+struct QuasarClients {
+    languages: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +490,9 @@ pub fn run(
     name: Option<String>,
     yes: bool,
     no_git: bool,
-    framework_override: Option<String>,
+    test_language_override: Option<String>,
+    rust_framework_override: Option<String>,
+    ts_sdk_override: Option<String>,
     template_override: Option<String>,
     toolchain_override: Option<String>,
 ) -> CliResult {
@@ -412,24 +502,40 @@ pub fn run(
     // flags given
     let skip_prompts = yes
         || name.is_some()
-        || framework_override.is_some()
+        || test_language_override.is_some()
+        || rust_framework_override.is_some()
+        || ts_sdk_override.is_some()
         || template_override.is_some()
         || toolchain_override.is_some();
 
     // Validate explicit flag values before proceeding
-    if let Some(ref f) = framework_override {
-        if !matches!(
-            f.as_str(),
-            "none" | "mollusk" | "quasarsvm-rust" | "quasarsvm-web3js" | "quasarsvm-kit"
-        ) {
+    if let Some(ref t) = test_language_override {
+        if !matches!(t.as_str(), "none" | "rust" | "typescript") {
             eprintln!(
                 "  {}",
-                crate::style::fail(&format!("unknown framework: {f}"))
+                crate::style::fail(&format!("unknown test language: {t}"))
             );
+            eprintln!("  {}", dim("valid: none, rust, typescript"));
+            std::process::exit(1);
+        }
+    }
+    if let Some(ref f) = rust_framework_override {
+        if !matches!(f.as_str(), "quasar-svm" | "mollusk") {
             eprintln!(
                 "  {}",
-                dim("valid: none, mollusk, quasarsvm-rust, quasarsvm-web3js, quasarsvm-kit")
+                crate::style::fail(&format!("unknown rust framework: {f}"))
             );
+            eprintln!("  {}", dim("valid: quasar-svm, mollusk"));
+            std::process::exit(1);
+        }
+    }
+    if let Some(ref s) = ts_sdk_override {
+        if !matches!(s.as_str(), "kit" | "web3.js") {
+            eprintln!(
+                "  {}",
+                crate::style::fail(&format!("unknown TypeScript SDK: {s}"))
+            );
+            eprintln!("  {}", dim("valid: kit, web3.js"));
             std::process::exit(1);
         }
     }
@@ -469,7 +575,7 @@ pub fn run(
             );
             eprintln!(
                 "  {}",
-                crate::style::dim("usage: quasar init <name> [--framework ...] [--template ...]")
+                crate::style::dim("usage: quasar init <name> [--test-language ...] [--template ...]")
             );
             std::process::exit(1);
         })
@@ -534,35 +640,172 @@ pub fn run(
         std::process::exit(1);
     }
 
-    // Testing framework
-    let framework_default = match framework_override
+    let lang_default = match test_language_override
         .as_deref()
-        .or(globals.defaults.framework.as_deref())
+        .or(globals.defaults.test_language.as_deref())
     {
-        Some("quasarsvm-rust") => 1,
-        Some("quasarsvm-web3js") => 2,
-        Some("quasarsvm-kit") => 3,
-        Some("mollusk") => 4,
         Some("none") => 0,
-        _ => 1,
+        Some("typescript") => 2,
+        _ => 1, // rust default
     };
-    let framework_idx = if skip_prompts {
-        framework_default
+    let rust_fw_default = match rust_framework_override
+        .as_deref()
+        .or(globals.defaults.rust_framework.as_deref())
+    {
+        Some("mollusk") => 1,
+        _ => 0, // quasar-svm default
+    };
+    let ts_sdk_default = match ts_sdk_override
+        .as_deref()
+        .or(globals.defaults.ts_sdk.as_deref())
+    {
+        Some("web3.js") => 1,
+        _ => 0, // kit default
+    };
+
+    // Test language
+    let test_lang_idx = if skip_prompts {
+        lang_default
     } else {
-        let framework_items = &["None", "Rust", "TypeScript", "Kit", "Rust (Mollusk)"];
+        let lang_items = &["None", "Rust", "TypeScript"];
         Select::with_theme(&theme)
-            .with_prompt("Testing framework")
-            .items(framework_items)
-            .default(framework_default)
+            .with_prompt("Test language")
+            .items(lang_items)
+            .default(lang_default)
             .interact()
             .map_err(anyhow::Error::from)?
     };
-    let framework = match framework_idx {
-        0 => Framework::None,
-        1 => Framework::QuasarSVMRust,
-        2 => Framework::QuasarSVMWeb3js,
-        3 => Framework::QuasarSVMKit,
-        _ => Framework::Mollusk,
+    let test_language = match test_lang_idx {
+        1 => TestLanguage::Rust,
+        2 => TestLanguage::TypeScript,
+        _ => TestLanguage::None,
+    };
+
+    // Rust test framework (only if Rust)
+    let rust_framework = if matches!(test_language, TestLanguage::Rust) {
+        let idx = if skip_prompts {
+            rust_fw_default
+        } else {
+            let items = &["QuasarSVM", "Mollusk"];
+            Select::with_theme(&theme)
+                .with_prompt("Rust test framework")
+                .items(items)
+                .default(rust_fw_default)
+                .interact()
+                .map_err(anyhow::Error::from)?
+        };
+        Some(match idx {
+            1 => RustFramework::Mollusk,
+            _ => RustFramework::QuasarSVM,
+        })
+    } else {
+        None
+    };
+
+    // TypeScript SDK (only if TypeScript)
+    let ts_sdk = if matches!(test_language, TestLanguage::TypeScript) {
+        let idx = if skip_prompts {
+            ts_sdk_default
+        } else {
+            let items = &["Kit", "Web3.js"];
+            Select::with_theme(&theme)
+                .with_prompt("TypeScript SDK")
+                .items(items)
+                .default(ts_sdk_default)
+                .interact()
+                .map_err(anyhow::Error::from)?
+        };
+        Some(match idx {
+            1 => TypeScriptSdk::Web3js,
+            _ => TypeScriptSdk::Kit,
+        })
+    } else {
+        None
+    };
+
+    // Package manager (only for TypeScript)
+    let package_manager = if matches!(test_language, TestLanguage::TypeScript) {
+        let pm_default = PackageManager::from_config(globals.defaults.package_manager.as_deref());
+        let pm_idx = if skip_prompts {
+            pm_default
+        } else {
+            let pm_items = &["pnpm", "bun", "npm", "yarn", "other"];
+            Select::with_theme(&theme)
+                .with_prompt("Package manager")
+                .items(pm_items)
+                .default(pm_default)
+                .interact()
+                .map_err(anyhow::Error::from)?
+        };
+        Some(match pm_idx {
+            0 => PackageManager::Pnpm,
+            1 => PackageManager::Bun,
+            2 => PackageManager::Npm,
+            3 => PackageManager::Yarn,
+            _ => {
+                let install: String = Input::with_theme(&theme)
+                    .with_prompt("Install command")
+                    .default("pnpm install".into())
+                    .interact_text()
+                    .map_err(anyhow::Error::from)?;
+                let test: String = Input::with_theme(&theme)
+                    .with_prompt("Test command")
+                    .default("pnpm test".into())
+                    .interact_text()
+                    .map_err(anyhow::Error::from)?;
+                PackageManager::Other { install, test }
+            }
+        })
+    } else {
+        None
+    };
+
+    // Client languages — Rust always included, test language forced on
+    let ts_tests = matches!(test_language, TestLanguage::TypeScript);
+    let client_languages: Vec<String> = if skip_prompts {
+        let mut langs = vec!["rust".to_string()];
+        if ts_tests {
+            langs.push("typescript".to_string());
+        }
+        langs
+    } else {
+        // Forced languages shown in prompt text, not selectable
+        let mut forced = vec!["Rust"];
+        if ts_tests {
+            forced.push("TypeScript");
+        }
+
+        let all_optional: &[(&str, &str)] = &[
+            ("TypeScript", "typescript"),
+            ("Golang", "golang"),
+            ("Python", "python"),
+        ];
+        let optional: Vec<(&str, &str)> = all_optional
+            .iter()
+            .copied()
+            .filter(|(display, _)| !forced.contains(display))
+            .collect();
+
+        let prompt = format!(
+            "Additional client languages ({} always included)",
+            forced.join(", ")
+        );
+
+        let display_items: Vec<&str> = optional.iter().map(|(d, _)| *d).collect();
+        let selected = MultiSelect::with_theme(&theme)
+            .with_prompt(&prompt)
+            .items(&display_items)
+            .interact()
+            .map_err(anyhow::Error::from)?;
+
+        let mut langs: Vec<String> = vec!["rust".to_string()];
+        if ts_tests {
+            langs.push("typescript".to_string());
+        }
+        for &i in &selected {
+            langs.push(optional[i].1.to_string());
+        }
+        langs
     };
 
     // Template
@@ -615,19 +858,24 @@ pub fn run(
 
     if skip_prompts {
         println!();
+        let fw_label = match test_language {
+            TestLanguage::None => "no tests".to_string(),
+            TestLanguage::Rust => format!("rust/{}", rust_framework.unwrap()),
+            TestLanguage::TypeScript => format!("typescript/{}", ts_sdk.unwrap()),
+        };
         println!(
             "  {} {} {} {} {} {} {}",
             dim("Using:"),
             bold(&toolchain.to_string()),
             dim("+"),
-            bold(&framework.to_string()),
+            bold(&fw_label),
             bold(&template.to_string()),
             dim("+"),
             bold(git_setup.summary_label()),
         );
     }
 
-    scaffold(&name, &crate_name, toolchain, framework, template)?;
+    scaffold(&name, &crate_name, toolchain, test_language, rust_framework, ts_sdk, template, package_manager.as_ref(), &client_languages)?;
 
     // Optional git setup (unless already in a git repo)
     maybe_initialize_git_repo(&name, git_setup);
@@ -638,12 +886,20 @@ pub fn run(
     } else {
         Some(git_setup.to_string())
     };
+    let saved_pm = package_manager
+        .as_ref()
+        .map(|pm| pm.to_string())
+        .or_else(|| globals.defaults.package_manager.clone());
+
     let new_globals = GlobalConfig {
         defaults: GlobalDefaults {
             toolchain: Some(toolchain.to_string()),
-            framework: Some(framework.to_string()),
+            test_language: Some(test_language.to_string()),
+            rust_framework: rust_framework.map(|f| f.to_string()),
+            ts_sdk: ts_sdk.map(|s| s.to_string()),
             template: Some(template.to_string()),
             git: saved_git_default,
+            package_manager: saved_pm,
         },
         ui: UiConfig {
             animation: false,
@@ -670,7 +926,7 @@ pub fn run(
         );
     }
     println!("    {}  {}", color(45, "\u{276f}"), bold("quasar build"));
-    if framework.has_rust_tests() || framework.has_typescript() {
+    if !matches!(test_language, TestLanguage::None) {
         println!("    {}  {}", color(45, "\u{276f}"), bold("quasar test"));
     }
     println!();
@@ -725,8 +981,12 @@ fn scaffold(
     dir: &str,
     name: &str,
     toolchain: Toolchain,
-    framework: Framework,
+    test_language: TestLanguage,
+    rust_framework: Option<RustFramework>,
+    ts_sdk: Option<TypeScriptSdk>,
     template: Template,
+    package_manager: Option<&PackageManager>,
+    client_languages: &[String],
 ) -> CliResult {
     let root = Path::new(dir);
 
@@ -759,7 +1019,29 @@ fn scaffold(
             toolchain_type: toolchain.to_string(),
         },
         testing: QuasarTesting {
-            framework: framework.to_string(),
+            language: test_language.to_string(),
+            rust: match (test_language, rust_framework) {
+                (TestLanguage::Rust, Some(fw)) => Some(QuasarRustTesting {
+                    framework: fw.to_string(),
+                    test: "cargo test tests::".to_string(),
+                }),
+                _ => None,
+            },
+            typescript: match (test_language, ts_sdk) {
+                (TestLanguage::TypeScript, Some(sdk)) => {
+                    let pm = package_manager.expect("package_manager required for TS");
+                    Some(QuasarTypeScriptTesting {
+                        framework: "quasar-svm".to_string(),
+                        sdk: sdk.to_string(),
+                        install: pm.install_cmd().to_string(),
+                        test: pm.test_cmd().to_string(),
+                    })
+                }
+                _ => None,
+            },
+        },
+        clients: QuasarClients {
+            languages: client_languages.to_vec(),
         },
     };
     let toml_str = toml::to_string_pretty(&config).map_err(anyhow::Error::from)?;
@@ -768,7 +1050,7 @@ fn scaffold(
     // Cargo.toml
     fs::write(
         root.join("Cargo.toml"),
-        generate_cargo_toml(name, toolchain, framework),
+        generate_cargo_toml(name, toolchain, test_language, rust_framework),
     )
     .map_err(anyhow::Error::from)?;
 
@@ -802,7 +1084,7 @@ fn scaffold(
 
     // src/lib.rs
     let module_name = name.replace('-', "_");
-    let has_rust_tests = framework.has_rust_tests();
+    let has_rust_tests = matches!(test_language, TestLanguage::Rust);
     fs::write(
         src.join("lib.rs"),
         generate_lib_rs(&module_name, &program_id, template, has_rust_tests),
@@ -830,31 +1112,29 @@ fn scaffold(
     }
 
     // Rust test scaffold
-    if framework.has_rust_tests() {
+    if let Some(fw) = rust_framework {
         fs::write(
             src.join("tests.rs"),
-            generate_tests_rs(&module_name, framework, template, toolchain),
+            generate_tests_rs(&module_name, fw, template, toolchain),
         )
         .map_err(anyhow::Error::from)?;
     }
 
     // TypeScript test scaffold
-    if framework.has_typescript() {
+    if let Some(sdk) = ts_sdk {
         let tests_dir = root.join("tests");
         fs::create_dir_all(&tests_dir).map_err(anyhow::Error::from)?;
 
-        // package.json and tsconfig.json go in the project root
         fs::write(
             root.join("package.json"),
-            generate_package_json(name, framework),
+            generate_package_json(name, sdk),
         )
         .map_err(anyhow::Error::from)?;
         fs::write(root.join("tsconfig.json"), TS_TEST_TSCONFIG).map_err(anyhow::Error::from)?;
 
-        // Test files go in tests/
         fs::write(
             tests_dir.join(format!("{}.test.ts", name)),
-            generate_test_ts(name, framework, toolchain),
+            generate_test_ts(name, sdk, toolchain),
         )
         .map_err(anyhow::Error::from)?;
     }
@@ -866,7 +1146,7 @@ fn scaffold(
 // Generators
 // ---------------------------------------------------------------------------
 
-fn generate_cargo_toml(name: &str, toolchain: Toolchain, framework: Framework) -> String {
+fn generate_cargo_toml(name: &str, toolchain: Toolchain, test_language: TestLanguage, rust_framework: Option<RustFramework>) -> String {
     let mut out = format!(
         r#"[package]
 name = "{name}"
@@ -899,9 +1179,9 @@ quasar-lang = "0.0"
     // Dev dependencies based on testing framework
     let client_dep = format!("{name}-client = {{ path = \"target/client/rust/{name}-client\" }}\n");
 
-    match framework {
-        Framework::None => {}
-        Framework::Mollusk => {
+    match (test_language, rust_framework) {
+        (TestLanguage::None, _) => {}
+        (TestLanguage::Rust, Some(RustFramework::Mollusk)) => {
             out.push_str(&format!(
                 r#"
 [dev-dependencies]
@@ -912,7 +1192,7 @@ solana-instruction = {{ version = "3.2.0", features = ["bincode"] }}
 "#,
             ));
         }
-        Framework::QuasarSVMRust => {
+        (TestLanguage::Rust, _) => {
             out.push_str(&format!(
                 r#"
 [dev-dependencies]
@@ -924,7 +1204,7 @@ solana-pubkey = {{ version = "4.1.0" }}
 "#,
             ));
         }
-        Framework::QuasarSVMWeb3js | Framework::QuasarSVMKit => {
+        (TestLanguage::TypeScript, _) => {
             out.push_str(&format!(
                 r#"
 [dev-dependencies]
@@ -1013,8 +1293,8 @@ mod {module_name} {{
     }
 }
 
-fn generate_package_json(name: &str, framework: Framework) -> String {
-    let solana_dep = if framework.is_kit() {
+fn generate_package_json(name: &str, ts_sdk: TypeScriptSdk) -> String {
+    let solana_dep = if matches!(ts_sdk, TypeScriptSdk::Kit) {
         "\"@solana/kit\": \"^6.0.0\""
     } else {
         "\"@solana/web3.js\": \"github:blueshift-gg/solana-web3.js#v2\""
@@ -1041,7 +1321,7 @@ fn generate_package_json(name: &str, framework: Framework) -> String {
     )
 }
 
-fn generate_test_ts(name: &str, framework: Framework, toolchain: Toolchain) -> String {
+fn generate_test_ts(name: &str, ts_sdk: TypeScriptSdk, toolchain: Toolchain) -> String {
     let module_name = name.replace('-', "_");
     let class_name = crate::utils::snake_to_pascal(&module_name);
     let so_name = match toolchain {
@@ -1049,7 +1329,7 @@ fn generate_test_ts(name: &str, framework: Framework, toolchain: Toolchain) -> S
         Toolchain::Solana => module_name.clone(),
     };
 
-    if framework.is_kit() {
+    if matches!(ts_sdk, TypeScriptSdk::Kit) {
         format!(
             r#"import {{ generateKeyPairSigner }} from "@solana/kit";
 import {{ {class_name}Client, PROGRAM_ADDRESS }} from "../target/client/typescript/{module_name}/kit";
@@ -1114,7 +1394,7 @@ describe.concurrent("{class_name} Program", async () => {{
 
 fn generate_tests_rs(
     module_name: &str,
-    framework: Framework,
+    rust_framework: RustFramework,
     template: Template,
     toolchain: Toolchain,
 ) -> String {
@@ -1124,8 +1404,8 @@ fn generate_tests_rs(
     };
     let client_crate = format!("{module_name}_client");
 
-    match (framework, template) {
-        (Framework::Mollusk, Template::Minimal | Template::Full) => {
+    match (rust_framework, template) {
+        (RustFramework::Mollusk, Template::Minimal | Template::Full) => {
             format!(
                 r#"use mollusk_svm::{{program::keyed_account_for_system_program, Mollusk}};
 use solana_account::Account;
@@ -1169,7 +1449,7 @@ fn test_initialize() {{
 "#
             )
         }
-        (Framework::QuasarSVMRust, Template::Minimal | Template::Full) => {
+        (RustFramework::QuasarSVM, Template::Minimal | Template::Full) => {
             format!(
                 r#"use quasar_svm::{{Account, Instruction, Pubkey, QuasarSvm}};
 use solana_address::Address;
@@ -1210,23 +1490,19 @@ fn test_initialize() {{
 "#
             )
         }
-        _ => r#"#[test]
-fn test_initialize() {
-    // TODO: implement test
-}
-"#
-        .to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::{
-        env,
-        path::PathBuf,
-        sync::Mutex,
-        time::{SystemTime, UNIX_EPOCH},
+    use {
+        super::*,
+        std::{
+            env,
+            path::PathBuf,
+            sync::Mutex,
+            time::{SystemTime, UNIX_EPOCH},
+        },
     };
 
     static PATH_LOCK: Mutex<()> = Mutex::new(());
@@ -1324,18 +1600,21 @@ mod tests {
                 path.push(existing);
             }
 
-            // Safety: tests hold PATH_LOCK, so process-global env mutation stays serialized.
+            // Safety: tests hold PATH_LOCK, so process-global env mutation stays
+            // serialized.
             unsafe {
                 env::set_var("PATH", path);
                 env::set_var("QUASAR_TEST_GIT_LOG", &log_path);
             }
             if let Some(cmd) = fail_on {
-                // Safety: tests hold PATH_LOCK, so process-global env mutation stays serialized.
+                // Safety: tests hold PATH_LOCK, so process-global env mutation stays
+                // serialized.
                 unsafe {
                     env::set_var("QUASAR_TEST_GIT_FAIL_ON", cmd);
                 }
             } else {
-                // Safety: tests hold PATH_LOCK, so process-global env mutation stays serialized.
+                // Safety: tests hold PATH_LOCK, so process-global env mutation stays
+                // serialized.
                 unsafe {
                     env::remove_var("QUASAR_TEST_GIT_FAIL_ON");
                 }
@@ -1351,7 +1630,8 @@ mod tests {
 
     impl Drop for TestGitEnv {
         fn drop(&mut self) {
-            // Safety: tests hold PATH_LOCK, so process-global env mutation stays serialized.
+            // Safety: tests hold PATH_LOCK, so process-global env mutation stays
+            // serialized.
             unsafe {
                 restore_env_var("PATH", self.old_path.as_ref());
                 restore_env_var("QUASAR_TEST_GIT_LOG", self.old_log.as_ref());
@@ -1371,7 +1651,8 @@ mod tests {
     fn write_fake_git(path: &Path) {
         fs::write(
             path,
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QUASAR_TEST_GIT_LOG\"\nif [ \"$1\" = \"$QUASAR_TEST_GIT_FAIL_ON\" ]; then\n  exit 1\nfi\nexit 0\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QUASAR_TEST_GIT_LOG\"\nif [ \"$1\" = \
+             \"$QUASAR_TEST_GIT_FAIL_ON\" ]; then\n  exit 1\nfi\nexit 0\n",
         )
         .unwrap();
         #[cfg(unix)]
@@ -1396,7 +1677,9 @@ const GITIGNORE: &str = "\
 # Lock files
 Cargo.lock
 package-lock.json
+pnpm-lock.yaml
 yarn.lock
+bun.lockb
 
 # Dependencies
 node_modules

@@ -4,20 +4,25 @@ use {
     std::path::{Path, PathBuf},
 };
 
-/// Generate IDL, TypeScript client, and Rust client crate for a program.
+/// Generate IDL and client crates for a program.
 ///
 /// Outputs:
-/// - `target/idl/<name>.idl.json`
-/// - `target/client/rust/<name>-client/` (standalone Rust crate)
-/// - `target/client/typescript/<name>/web3.ts` when `generate_typescript` is
-///   true
-pub fn generate(crate_path: &Path, generate_typescript: bool) -> CliResult {
+/// - `target/idl/<name>.idl.json` (always)
+/// - `target/client/rust/<name>-client/` when languages contains "rust"
+/// - `target/client/typescript/<name>/` when languages contains "typescript"
+pub fn generate(crate_path: &Path, languages: &[&str]) -> CliResult {
     // Parse the program
     let parsed = parser::parse_program(crate_path);
 
-    // Generate client code before build_idl consumes parsed
-    let client_code = codegen::rust::generate_client(&parsed);
-    let client_cargo_toml = codegen::rust::generate_cargo_toml(&parsed.crate_name, &parsed.version);
+    // Generate Rust client code before build_idl consumes parsed
+    let (client_code, client_cargo_toml) = if languages.contains(&"rust") {
+        (
+            Some(codegen::rust::generate_client(&parsed)),
+            Some(codegen::rust::generate_cargo_toml(&parsed.crate_name, &parsed.version)),
+        )
+    } else {
+        (None, None)
+    };
 
     // Build the IDL
     let idl = parser::build_idl(parsed);
@@ -31,7 +36,8 @@ pub fn generate(crate_path: &Path, generate_typescript: bool) -> CliResult {
         .map_err(|e| anyhow::anyhow!("failed to serialize IDL: {e}"))?;
     std::fs::write(&idl_path, &json)?;
 
-    if generate_typescript {
+    // TypeScript client
+    if languages.contains(&"typescript") {
         let ts_code = codegen::typescript::generate_ts_client(&idl);
         let ts_kit_code = codegen::typescript::generate_ts_client_kit(&idl);
 
@@ -73,17 +79,19 @@ pub fn generate(crate_path: &Path, generate_typescript: bool) -> CliResult {
         std::fs::write(ts_dir.join("package.json"), &ts_package_json)?;
     }
 
-    // Write Rust client as a standalone crate in target/client/rust/<name>-client/
-    let crate_name = &idl.metadata.crate_name;
-    let client_dir = PathBuf::from("target")
-        .join("client")
-        .join("rust")
-        .join(format!("{}-client", crate_name));
-    let client_src_dir = client_dir.join("src");
-    std::fs::create_dir_all(&client_src_dir)?;
+    // Rust client
+    if let (Some(code), Some(cargo_toml)) = (client_code, client_cargo_toml) {
+        let crate_name = &idl.metadata.crate_name;
+        let client_dir = PathBuf::from("target")
+            .join("client")
+            .join("rust")
+            .join(format!("{}-client", crate_name));
+        let client_src_dir = client_dir.join("src");
+        std::fs::create_dir_all(&client_src_dir)?;
 
-    std::fs::write(client_dir.join("Cargo.toml"), &client_cargo_toml)?;
-    std::fs::write(client_src_dir.join("lib.rs"), &client_code)?;
+        std::fs::write(client_dir.join("Cargo.toml"), &cargo_toml)?;
+        std::fs::write(client_src_dir.join("lib.rs"), &code)?;
+    }
 
     Ok(())
 }
@@ -96,7 +104,8 @@ pub fn run(command: IdlCommand) -> CliResult {
         std::process::exit(1);
     }
 
-    generate(crate_path, true)?;
+    // `quasar idl` generates all available languages
+    generate(crate_path, &["rust", "typescript"])?;
     println!("  {}", crate::style::success("IDL generated"));
     Ok(())
 }

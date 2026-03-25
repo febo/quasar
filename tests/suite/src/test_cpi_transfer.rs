@@ -1,0 +1,215 @@
+use {
+    crate::helpers::*,
+    quasar_svm::{Account, Instruction, Pubkey},
+    quasar_test_token_cpi::client::*,
+};
+
+// ===========================================================================
+// TransferChecked (discriminator 0) — Program<Token>
+// ===========================================================================
+
+#[test]
+fn transfer_checked_spl() {
+    let mut svm = svm_cpi();
+    let authority = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let from_key = Pubkey::new_unique();
+    let to_key = Pubkey::new_unique();
+    let token_program = spl_token_program_id();
+
+    let instruction: Instruction = TransferCheckedInstruction {
+        authority,
+        from: from_key,
+        mint: mint_key,
+        to: to_key,
+        token_program,
+        amount: 200,
+        decimals: 9,
+    }
+    .into();
+
+    let result = svm.process_instructions(
+        &[instruction],
+        &[
+            (authority, signer_account()),
+            (from_key, token_account(mint_key, authority, 500, token_program)),
+            (mint_key, mint_account(authority, 9, token_program)),
+            (to_key, token_account(mint_key, authority, 0, token_program)),
+        ],
+    );
+    assert!(result.is_ok(), "transfer_checked SPL should succeed: {:?}", result.raw_result);
+}
+
+// ===========================================================================
+// TransferCheckedT22 (discriminator 20) — Program<Token2022>
+// ===========================================================================
+
+#[test]
+fn transfer_checked_t22() {
+    let mut svm = svm_cpi();
+    let authority = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let from_key = Pubkey::new_unique();
+    let to_key = Pubkey::new_unique();
+    let token_program = token_2022_program_id();
+
+    let instruction: Instruction = TransferCheckedT22Instruction {
+        authority,
+        from: from_key,
+        mint: mint_key,
+        to: to_key,
+        token_program,
+        amount: 200,
+        decimals: 9,
+    }
+    .into();
+
+    let result = svm.process_instructions(
+        &[instruction],
+        &[
+            (authority, signer_account()),
+            (from_key, token_account(mint_key, authority, 500, token_program)),
+            (mint_key, mint_account(authority, 9, token_program)),
+            (to_key, token_account(mint_key, authority, 0, token_program)),
+        ],
+    );
+    assert!(result.is_ok(), "transfer_checked T22 should succeed: {:?}", result.raw_result);
+}
+
+// ===========================================================================
+// TransferCheckedInterface (discriminator 21) — Interface<TokenInterface>
+// ===========================================================================
+
+#[test]
+fn transfer_checked_interface_spl() {
+    let mut svm = svm_cpi();
+    let authority = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let from_key = Pubkey::new_unique();
+    let to_key = Pubkey::new_unique();
+    let token_program = spl_token_program_id();
+
+    let instruction: Instruction = TransferCheckedInterfaceInstruction {
+        authority,
+        from: from_key,
+        mint: mint_key,
+        to: to_key,
+        token_program,
+        amount: 200,
+        decimals: 9,
+    }
+    .into();
+
+    let result = svm.process_instructions(
+        &[instruction],
+        &[
+            (authority, signer_account()),
+            (from_key, token_account(mint_key, authority, 500, token_program)),
+            (mint_key, mint_account(authority, 9, token_program)),
+            (to_key, token_account(mint_key, authority, 0, token_program)),
+        ],
+    );
+    assert!(
+        result.is_ok(),
+        "transfer_checked interface SPL should succeed: {:?}",
+        result.raw_result
+    );
+}
+
+#[test]
+fn transfer_checked_interface_t22() {
+    let mut svm = svm_cpi();
+    let authority = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let from_key = Pubkey::new_unique();
+    let to_key = Pubkey::new_unique();
+    let token_program = token_2022_program_id();
+
+    let instruction: Instruction = TransferCheckedInterfaceInstruction {
+        authority,
+        from: from_key,
+        mint: mint_key,
+        to: to_key,
+        token_program,
+        amount: 200,
+        decimals: 9,
+    }
+    .into();
+
+    let result = svm.process_instructions(
+        &[instruction],
+        &[
+            (authority, signer_account()),
+            (from_key, token_account(mint_key, authority, 500, token_program)),
+            (mint_key, mint_account(authority, 9, token_program)),
+            (to_key, token_account(mint_key, authority, 0, token_program)),
+        ],
+    );
+    assert!(
+        result.is_ok(),
+        "transfer_checked interface T22 should succeed: {:?}",
+        result.raw_result
+    );
+}
+
+// ===========================================================================
+// InterfaceTransfer (discriminator 6) — unchecked transfer via Interface
+// ===========================================================================
+
+#[test]
+fn interface_transfer_spl() {
+    let mut svm = svm_cpi();
+    let authority = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let from_key = Pubkey::new_unique();
+    let to_key = Pubkey::new_unique();
+    let token_program = spl_token_program_id();
+
+    let instruction: Instruction = InterfaceTransferInstruction {
+        authority,
+        from: from_key,
+        to: to_key,
+        token_program,
+        amount: 300,
+    }
+    .into();
+
+    let result = svm.process_instructions(
+        &[instruction],
+        &[
+            (authority, signer_account()),
+            (from_key, token_account(mint_key, authority, 500, token_program)),
+            (to_key, token_account(mint_key, authority, 0, token_program)),
+        ],
+    );
+    assert!(result.is_ok(), "interface_transfer SPL should succeed: {:?}", result.raw_result);
+}
+
+#[test]
+fn interface_transfer_t22() {
+    let mut svm = svm_cpi();
+    let authority = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let from_key = Pubkey::new_unique();
+    let to_key = Pubkey::new_unique();
+    let token_program = token_2022_program_id();
+
+    let instruction: Instruction = InterfaceTransferInstruction {
+        authority,
+        from: from_key,
+        to: to_key,
+        token_program,
+        amount: 300,
+    }
+    .into();
+
+    let result = svm.process_instructions(
+        &[instruction],
+        &[
+            (authority, signer_account()),
+            (from_key, token_account(mint_key, authority, 500, token_program)),
+            (to_key, token_account(mint_key, authority, 0, token_program)),
+        ],
+    );
+    assert!(result.is_ok(), "interface_transfer T22 should succeed: {:?}", result.raw_result);
+}

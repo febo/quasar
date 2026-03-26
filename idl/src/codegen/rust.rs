@@ -227,7 +227,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
 
         // Account struct definitions (use original snake_case field names)
         for acc in &parsed.state_accounts {
-            out.push_str("#[derive(Clone, Copy, QuasarSerialize)]\n#[repr(C)]\n");
+            out.push_str("#[derive(Clone, Copy, SchemaWrite, SchemaRead)]\n#[repr(C)]\n");
             writeln!(out, "pub struct {} {{", acc.name).expect("write to String");
             for (field_name, field_ty) in &acc.fields {
                 writeln!(
@@ -268,25 +268,14 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
             } else {
                 writeln!(
                     out,
-                    "        let data = &data[{}_ACCOUNT_DISCRIMINATOR.len()..];",
+                    "        let payload = &data[{}_ACCOUNT_DISCRIMINATOR.len()..];",
                     const_name
                 )
                 .expect("write to String");
-                out.push_str("        let mut offset = 0usize;\n");
-                for (field_name, field_ty) in &acc.fields {
-                    out.push_str(&deserialize_field_expr(
-                        field_name,
-                        &helpers::map_type_from_syn(field_ty),
-                    ));
-                }
-                let field_names: Vec<&str> =
-                    acc.fields.iter().map(|(name, _)| name.as_str()).collect();
                 writeln!(
                     out,
-                    "        return Some(ProgramAccount::{}({} {{ {} }}));",
-                    acc.name,
-                    acc.name,
-                    field_names.join(", ")
+                    "        return wincode::deserialize::<{}>(payload).ok().map(ProgramAccount::{});",
+                    acc.name, acc.name
                 )
                 .expect("write to String");
             }
@@ -313,6 +302,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
 
         // Event struct definitions (use original snake_case field names)
         for ev in &parsed.events {
+            out.push_str("#[derive(SchemaWrite, SchemaRead)]\n");
             writeln!(out, "pub struct {} {{", ev.name).expect("write to String");
             for (field_name, field_ty) in &ev.fields {
                 writeln!(
@@ -353,25 +343,14 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
             } else {
                 writeln!(
                     out,
-                    "        let data = &data[{}_EVENT_DISCRIMINATOR.len()..];",
+                    "        let payload = &data[{}_EVENT_DISCRIMINATOR.len()..];",
                     const_name
                 )
                 .expect("write to String");
-                out.push_str("        let mut offset = 0usize;\n");
-                for (field_name, field_ty) in &ev.fields {
-                    out.push_str(&deserialize_field_expr(
-                        field_name,
-                        &helpers::map_type_from_syn(field_ty),
-                    ));
-                }
-                let field_names: Vec<&str> =
-                    ev.fields.iter().map(|(name, _)| name.as_str()).collect();
                 writeln!(
                     out,
-                    "        return Some(ProgramEvent::{}({} {{ {} }}));",
-                    ev.name,
-                    ev.name,
-                    field_names.join(", ")
+                    "        return wincode::deserialize::<{}>(payload).ok().map(ProgramEvent::{});",
+                    ev.name, ev.name
                 )
                 .expect("write to String");
             }
@@ -419,68 +398,6 @@ fn collect_defined_refs(ty: &IdlType, out: &mut std::collections::BTreeSet<Strin
     }
 }
 
-/// Generate deserialization code for a single event field (reads from `data` at
-/// `offset`).
-fn deserialize_field_expr(name: &str, ty: &IdlType) -> String {
-    match ty {
-        IdlType::Primitive(p) => match p.as_str() {
-            "bool" => format!(
-                "        let {} = data[offset] != 0;\n        offset += 1;\n",
-                name
-            ),
-            "u8" => format!(
-                "        let {} = data[offset];\n        offset += 1;\n",
-                name
-            ),
-            "i8" => format!(
-                "        let {} = data[offset] as i8;\n        offset += 1;\n",
-                name
-            ),
-            "publicKey" => format!(
-                "        let {n} = Address::from(<[u8; 32]>::try_from(&data[offset..offset + \
-                 32]).ok()?);\n\x20       offset += 32;\n",
-                n = name,
-            ),
-            other if other.starts_with('[') => {
-                let size = parse_fixed_array_size(other).unwrap_or(0);
-                format!(
-                    "        let {n}: {ty} = data[offset..offset + {sz}].try_into().ok()?;\n\
-                     \x20       offset += {sz};\n",
-                    n = name,
-                    ty = other,
-                    sz = size,
-                )
-            }
-            other => {
-                let size = primitive_size(other);
-                format!(
-                    "        let {n} = {ty}::from_le_bytes(data[offset..offset + \
-                     {sz}].try_into().ok()?);\n\x20       offset += {sz};\n",
-                    n = name,
-                    ty = other,
-                    sz = size,
-                )
-            }
-        },
-        _ => format!(
-            "        let {} = Default::default(); // unsupported type\n",
-            name
-        ),
-    }
-}
-
-fn primitive_size(p: &str) -> usize {
-    match p {
-        "u8" | "i8" | "bool" => 1,
-        "u16" | "i16" => 2,
-        "u32" | "i32" => 4,
-        "u64" | "i64" => 8,
-        "u128" | "i128" => 16,
-        "publicKey" => 32,
-        _ => 0,
-    }
-}
-
 /// Format discriminator bytes as a comma-separated list (no brackets).
 fn format_disc_list(disc: &[u8]) -> String {
     let mut s = String::with_capacity(disc.len() * 4);
@@ -502,13 +419,6 @@ fn pascal_to_screaming_snake(s: &str) -> String {
         result.push(c.to_ascii_uppercase());
     }
     result
-}
-
-/// Parse the size from a fixed-size array primitive like "[u8; 8]" → 8.
-fn parse_fixed_array_size(p: &str) -> Option<usize> {
-    let inner = p.strip_prefix('[')?.strip_suffix(']')?;
-    let (_, size_str) = inner.split_once(';')?;
-    size_str.trim().parse().ok()
 }
 
 fn snake_to_pascal(s: &str) -> String {

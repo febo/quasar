@@ -16,9 +16,9 @@ use {
     syn::{parse::ParseStream, parse_macro_input, Data, DeriveInput, Fields, Ident, Token, Type},
 };
 
-struct InstructionArg {
-    name: Ident,
-    ty: Type,
+pub(super) struct InstructionArg {
+    pub name: Ident,
+    pub ty: Type,
 }
 
 fn parse_struct_instruction_args(input: &DeriveInput) -> Option<Vec<InstructionArg>> {
@@ -75,7 +75,9 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
         .filter_map(|f| f.ident.as_ref().map(|i| i.to_string()))
         .collect();
 
-    let mut pf = match fields::process_fields(fields, &field_name_strings) {
+    let instruction_args = parse_struct_instruction_args(&input);
+
+    let mut pf = match fields::process_fields(fields, &field_name_strings, &instruction_args) {
         Ok(pf) => pf,
         Err(ts) => return ts,
     };
@@ -545,7 +547,6 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
     // --- Instruction arg extraction (struct-level #[instruction(...)]) ---
 
-    let instruction_args = parse_struct_instruction_args(&input);
     let has_instruction_args = instruction_args.is_some();
 
     let ix_arg_extraction = if let Some(ref ix_args) = instruction_args {

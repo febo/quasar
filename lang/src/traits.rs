@@ -82,6 +82,14 @@ pub trait ProgramInterface {
 /// Implemented by: `#[account]` and `#[instruction]` derive macros.
 pub trait Discriminator {
     const DISCRIMINATOR: &'static [u8];
+
+    /// Byte offset of a stored `bump: u8` field from the start of account data.
+    ///
+    /// When `Some(offset)`, PDA validation can read the bump directly from
+    /// account data and use `verify_program_address` (~200 CU) instead of
+    /// `based_try_find_program_address` (~544 CU). Automatically set by
+    /// `#[account]` when the struct contains a `bump: u8` field.
+    const BUMP_OFFSET: Option<usize> = None;
 }
 
 /// Declares the total byte size of an account's data (including discriminator

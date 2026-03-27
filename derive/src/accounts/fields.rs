@@ -567,15 +567,30 @@ fn validate_field_attrs(
     Ok(())
 }
 
+/// Check if a syn::Type is `u8`.
+fn is_type_u8(ty: &Type) -> bool {
+    matches!(ty, Type::Path(tp) if tp.path.is_ident("u8"))
+}
+
 pub(super) fn process_fields(
     fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
     field_name_strings: &[String],
+    instruction_args: &Option<Vec<super::InstructionArg>>,
 ) -> Result<ProcessedFields, proc_macro::TokenStream> {
     let field_attrs: Vec<AccountFieldAttrs> = fields
         .iter()
         .map(parse_field_attrs)
         .collect::<syn::Result<Vec<_>>>()
         .map_err(|e| -> proc_macro::TokenStream { e.to_compile_error().into() })?;
+
+    // --- PDA bump auto-detection pre-scan ---
+    // Count bare-bump PDA fields (seeds present, bump = None/bare).
+    // Used to determine if a generic `bump: u8` instruction arg can be auto-bound
+    // (only when exactly one bare-bump PDA exists).
+    let bare_bump_pda_count = field_attrs
+        .iter()
+        .filter(|a| a.seeds.is_some() && matches!(a.bump, Some(None)))
+        .count();
 
     // --- Feature flags ---
 
@@ -1254,17 +1269,96 @@ pub(super) fn process_fields(
                     }
                 }
                 Some(None) => {
-                    let check = quote! {
-                        {
-                            #(#seed_len_checks)*
-                            let __pda_seeds = [#(#seed_idents),*];
-                            let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
-                            if #addr_access != __expected {
-                                return Err(QuasarError::InvalidPda.into());
+                    // --- PDA bump auto-detection ---
+                    // Priority: 1) instruction arg match  2) inner account stored bump  3) find
+                    let field_bump_name = format!("{}_bump", field_name);
+
+                    // Try matching instruction arg: {field}_bump: u8 or single-PDA bump: u8
+                    let ix_arg_match = instruction_args.as_ref().and_then(|args| {
+                        args.iter().find(|a| {
+                            if !is_type_u8(&a.ty) {
+                                return false;
                             }
-                            #bump_var = __bump;
+                            let name = a.name.to_string();
+                            if name == field_bump_name {
+                                return true; // Rule 2: {field_name}_bump: u8
+                            }
+                            if name == "bump" && bare_bump_pda_count == 1 {
+                                return true; // Rule 3: single bare-bump PDA + bump: u8
+                            }
+                            false
+                        })
+                    });
+
+                    let check = if let Some(arg) = ix_arg_match {
+                        // Auto-bind: instruction arg → verify_program_address
+                        let arg_ident = &arg.name;
+                        quote! {
+                            {
+                                #(#seed_len_checks)*
+                                let __bump_val: u8 = #arg_ident;
+                                let __bump_ref: &[u8] = &[__bump_val];
+                                let __pda_seeds = [#(#seed_idents,)* __bump_ref];
+                                quasar_lang::pda::verify_program_address(&__pda_seeds, __program_id, &#addr_access)?;
+                                #bump_var = __bump_val;
+                            }
+                        }
+                    } else if !is_init_field {
+                        // Try inner account's BUMP_OFFSET (non-init only — init accounts don't have data yet).
+                        // Extract inner type T from Account<T> for BUMP_OFFSET lookup.
+                        let inner_ty = extract_generic_inner_type(underlying_ty, "Account");
+
+                        if let Some(inner_ty) = inner_ty {
+                            // Account<T>: use BUMP_OFFSET if available, else find
+                            let view_access = quote! { #field_name.to_account_view() };
+                            quote! {
+                                {
+                                    #(#seed_len_checks)*
+                                    if let Some(__offset) = <#inner_ty as Discriminator>::BUMP_OFFSET {
+                                        let __bump_val: u8 = unsafe { *#view_access.data_ptr().add(__offset) };
+                                        let __bump_ref: &[u8] = &[__bump_val];
+                                        let __pda_seeds = [#(#seed_idents,)* __bump_ref];
+                                        quasar_lang::pda::verify_program_address(&__pda_seeds, __program_id, &#addr_access)?;
+                                        #bump_var = __bump_val;
+                                    } else {
+                                        let __pda_seeds = [#(#seed_idents),*];
+                                        let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
+                                        if #addr_access != __expected {
+                                            return Err(QuasarError::InvalidPda.into());
+                                        }
+                                        #bump_var = __bump;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Non-Account type (UncheckedAccount, etc.): find
+                            quote! {
+                                {
+                                    #(#seed_len_checks)*
+                                    let __pda_seeds = [#(#seed_idents),*];
+                                    let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
+                                    if #addr_access != __expected {
+                                        return Err(QuasarError::InvalidPda.into());
+                                    }
+                                    #bump_var = __bump;
+                                }
+                            }
+                        }
+                    } else {
+                        // Init field: no stored bump yet, use find
+                        quote! {
+                            {
+                                #(#seed_len_checks)*
+                                let __pda_seeds = [#(#seed_idents),*];
+                                let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
+                                if #addr_access != __expected {
+                                    return Err(QuasarError::InvalidPda.into());
+                                }
+                                #bump_var = __bump;
+                            }
                         }
                     };
+
                     if is_optional && !is_init_field {
                         target_checks
                             .push(quote! { if let Some(ref #field_name) = #field_name { #check } });

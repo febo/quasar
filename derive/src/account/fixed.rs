@@ -42,6 +42,22 @@ pub(super) fn generate_fixed_account(
         .map(|f| zc_assign_from_value(f.ident.as_ref().unwrap(), &f.ty))
         .collect();
 
+    // Detect a `bump: u8` field for PDA bump auto-detection.
+    let has_bump_u8 = fields_data.iter().any(|f| {
+        f.ident.as_ref().is_some_and(|id| id == "bump")
+            && matches!(&f.ty, syn::Type::Path(tp) if tp.path.is_ident("u8"))
+    });
+
+    let bump_offset_impl = if has_bump_u8 {
+        quote! {
+            const BUMP_OFFSET: Option<usize> = Some(
+                #disc_len + core::mem::offset_of!(#zc_mod::#zc_name, bump)
+            );
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         // --- View type: repr(transparent) over AccountView ---
 
@@ -78,6 +94,7 @@ pub(super) fn generate_fixed_account(
 
         impl Discriminator for #name {
             const DISCRIMINATOR: &'static [u8] = &[#(#disc_bytes),*];
+            #bump_offset_impl
         }
 
         impl Space for #name {

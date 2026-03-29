@@ -33,6 +33,17 @@ pub fn validate_token_account(
     authority: &Address,
     token_program: &Address,
 ) -> Result<(), ProgramError> {
+    // Verify the token program is a known SPL token program.
+    if unlikely(
+        !quasar_lang::keys_eq(token_program, &crate::SPL_TOKEN_ID)
+            && !quasar_lang::keys_eq(token_program, &crate::TOKEN_2022_ID),
+    ) {
+        #[cfg(feature = "debug")]
+        quasar_lang::prelude::log(
+            "validate_token_account: token_program is not SPL Token or Token-2022",
+        );
+        return Err(ProgramError::IncorrectProgramId);
+    }
     if unlikely(!quasar_lang::keys_eq(view.owner(), token_program)) {
         #[cfg(feature = "debug")]
         quasar_lang::prelude::log("validate_token_account: wrong program owner");
@@ -91,6 +102,15 @@ pub fn validate_mint(
     freeze_authority: Option<&Address>,
     token_program: &Address,
 ) -> Result<(), ProgramError> {
+    // Verify the token program is a known SPL token program.
+    if unlikely(
+        !quasar_lang::keys_eq(token_program, &crate::SPL_TOKEN_ID)
+            && !quasar_lang::keys_eq(token_program, &crate::TOKEN_2022_ID),
+    ) {
+        #[cfg(feature = "debug")]
+        quasar_lang::prelude::log("validate_mint: token_program is not SPL Token or Token-2022");
+        return Err(ProgramError::IncorrectProgramId);
+    }
     if unlikely(!quasar_lang::keys_eq(view.owner(), token_program)) {
         #[cfg(feature = "debug")]
         quasar_lang::prelude::log("validate_mint: wrong program owner");
@@ -163,11 +183,13 @@ pub fn validate_ata(
     mint: &Address,
     token_program: &Address,
 ) -> Result<(), ProgramError> {
+    // No allowlist check here — `validate_token_account` (called below)
+    // already verifies `token_program` is SPL Token or Token-2022.
     let (expected, _) = crate::associated_token::get_associated_token_address_with_program(
         wallet,
         mint,
         token_program,
-    );
+    )?;
     if unlikely(!quasar_lang::keys_eq(view.address(), &expected)) {
         #[cfg(feature = "debug")]
         quasar_lang::prelude::log("validate_ata: address mismatch");

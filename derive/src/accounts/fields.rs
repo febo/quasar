@@ -6,7 +6,12 @@
 //! field attribute combination produces distinct codegen paths.
 
 use {
-    super::attrs::{parse_field_attrs, AccountFieldAttrs},
+    super::{
+        attrs::{parse_field_attrs, AccountFieldAttrs},
+        field_kind::{
+            debug_checked, debug_guard, strip_ref, type_base_name, FieldFlags, FieldKind,
+        },
+    },
     crate::helpers::{extract_generic_inner_type, seed_slice_expr_for_parse, strip_generics},
     quote::{format_ident, quote},
     syn::{Expr, ExprLit, Ident, Lit, Type},
@@ -37,10 +42,7 @@ pub(super) struct SweepFieldInfo {
 
 pub(super) struct ProcessedFields {
     pub field_constructs: Vec<proc_macro2::TokenStream>,
-    pub has_one_checks: Vec<proc_macro2::TokenStream>,
-    pub constraint_checks: Vec<proc_macro2::TokenStream>,
-    pub mut_checks: Vec<proc_macro2::TokenStream>,
-    pub pda_checks: Vec<proc_macro2::TokenStream>,
+    pub field_checks: Vec<proc_macro2::TokenStream>,
     pub bump_init_vars: Vec<proc_macro2::TokenStream>,
     pub bump_struct_fields: Vec<proc_macro2::TokenStream>,
     pub bump_struct_inits: Vec<proc_macro2::TokenStream>,
@@ -52,16 +54,9 @@ pub(super) struct ProcessedFields {
     pub close_fields: Vec<CloseFieldInfo>,
     pub sweep_fields: Vec<SweepFieldInfo>,
     pub needs_rent: bool,
-}
-
-/// Extract the base name (last segment) of a type, stripping references and
-/// generics.
-fn type_base_name(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Path(type_path) => type_path.path.segments.last().map(|s| s.ident.to_string()),
-        Type::Reference(type_ref) => type_base_name(&type_ref.elem),
-        _ => None,
-    }
+    /// If the struct has a `Sysvar<Rent>` field, its ident. Used to avoid
+    /// the `sol_get_rent_sysvar` syscall when a rent account is available.
+    pub rent_sysvar_field: Option<Ident>,
 }
 
 /// Find a field by type base name or Program<T>/Interface<T> wrapper. Returns
@@ -71,98 +66,28 @@ fn find_field_by_type<'a>(
     type_names: &[&str],
 ) -> Option<&'a Ident> {
     for field in fields.iter() {
-        // Strip reference if present
-        let ty = match &field.ty {
-            syn::Type::Reference(type_ref) => &*type_ref.elem,
-            other => other,
-        };
+        let ty = strip_ref(&field.ty);
 
         // Check direct type name match
-        if let Some(base) = type_base_name(&field.ty) {
+        if let Some(base) = type_base_name(ty) {
             if type_names.contains(&base.as_str()) {
                 return field.ident.as_ref();
             }
         }
 
-        // Check Program<T> wrapper
-        if let Some(inner_ty) = extract_generic_inner_type(ty, "Program") {
-            if let Some(inner_base) = type_base_name(inner_ty) {
-                if type_names.contains(&inner_base.as_str()) {
-                    return field.ident.as_ref();
+        // Check Program<T> or Interface<T> wrapper inner type
+        match FieldKind::classify(ty) {
+            FieldKind::Program { inner_ty } | FieldKind::Interface { inner_ty } => {
+                if let Some(inner_base) = type_base_name(inner_ty) {
+                    if type_names.contains(&inner_base.as_str()) {
+                        return field.ident.as_ref();
+                    }
                 }
             }
-        }
-
-        // Check Interface<T> wrapper
-        if let Some(inner_ty) = extract_generic_inner_type(ty, "Interface") {
-            if let Some(inner_base) = type_base_name(inner_ty) {
-                if type_names.contains(&inner_base.as_str()) {
-                    return field.ident.as_ref();
-                }
-            }
+            _ => {}
         }
     }
     None
-}
-
-/// Check if a field's type is `InterfaceAccount<T>` (or
-/// `&InterfaceAccount<T>`).
-fn is_interface_account_field(field: &syn::Field) -> bool {
-    let ty = match &field.ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    extract_generic_inner_type(ty, "InterfaceAccount").is_some()
-}
-
-/// Check if a field's type wraps a token or mint inner type
-/// (`Account<Token>`, `Account<Token2022>`, `Account<Mint>`,
-/// `Account<Mint2022>`, `InterfaceAccount<Token>`, `InterfaceAccount<Mint>`).
-fn is_token_or_mint_field(field: &syn::Field) -> bool {
-    const TOKEN_MINT_TYPES: &[&str] = &["Token", "Token2022", "Mint", "Mint2022"];
-    let ty = match &field.ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    for wrapper in &["Account", "InterfaceAccount"] {
-        if let Some(inner) = extract_generic_inner_type(ty, wrapper) {
-            if let Some(base) = type_base_name(inner) {
-                if TOKEN_MINT_TYPES.contains(&base.as_str()) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Check if a field's type wraps a token account inner type (not mint).
-/// (`Account<Token>`, `Account<Token2022>`, `InterfaceAccount<Token>`).
-fn is_token_account_field(field: &syn::Field) -> bool {
-    const TOKEN_TYPES: &[&str] = &["Token", "Token2022"];
-    let ty = match &field.ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    for wrapper in &["Account", "InterfaceAccount"] {
-        if let Some(inner) = extract_generic_inner_type(ty, wrapper) {
-            if let Some(base) = type_base_name(inner) {
-                if TOKEN_TYPES.contains(&base.as_str()) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Check if a field's type is `Signer` (or `&Signer` / `&mut Signer`).
-fn is_signer_field(field: &syn::Field) -> bool {
-    let ty = match &field.ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    type_base_name(ty).as_deref() == Some("Signer")
 }
 
 /// Resolve the token program address expression for a non-init field based on
@@ -175,12 +100,9 @@ fn resolve_token_program_addr(
     effective_ty: &Type,
     token_program_field: Option<&Ident>,
 ) -> proc_macro2::TokenStream {
-    let underlying = match effective_ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    if let Some(inner) = extract_generic_inner_type(underlying, "Account") {
-        if let Some(name) = type_base_name(inner) {
+    let underlying = strip_ref(effective_ty);
+    if let FieldKind::Account { inner_ty } = FieldKind::classify(underlying) {
+        if let Some(name) = type_base_name(inner_ty) {
             match name.as_str() {
                 "Token" | "Mint" => return quote! { &quasar_spl::SPL_TOKEN_ID },
                 "Token2022" | "Mint2022" => return quote! { &quasar_spl::TOKEN_2022_ID },
@@ -202,16 +124,12 @@ fn count_fields_by_type(
 ) -> usize {
     let mut count = 0;
     for field in fields.iter() {
-        let ty = match &field.ty {
-            syn::Type::Reference(type_ref) => &*type_ref.elem,
-            other => other,
-        };
-        let matched = if let Some(inner_ty) = extract_generic_inner_type(ty, "Program") {
-            type_base_name(inner_ty).is_some_and(|b| type_names.contains(&b.as_str()))
-        } else if let Some(inner_ty) = extract_generic_inner_type(ty, "Interface") {
-            type_base_name(inner_ty).is_some_and(|b| type_names.contains(&b.as_str()))
-        } else {
-            false
+        let ty = strip_ref(&field.ty);
+        let matched = match FieldKind::classify(ty) {
+            FieldKind::Program { inner_ty } | FieldKind::Interface { inner_ty } => {
+                type_base_name(inner_ty).is_some_and(|b| type_names.contains(&b.as_str()))
+            }
+            _ => false,
         };
         if matched {
             count += 1;
@@ -238,12 +156,9 @@ fn find_field_by_account_inner_type<'a>(
     inner_type_names: &[&str],
 ) -> Option<&'a Ident> {
     for field in fields.iter() {
-        let ty = match &field.ty {
-            Type::Reference(r) => &*r.elem,
-            other => other,
-        };
-        if let Some(inner) = extract_generic_inner_type(ty, "Account") {
-            if let Some(base) = type_base_name(inner) {
+        let ty = strip_ref(&field.ty);
+        if let FieldKind::Account { inner_ty } = FieldKind::classify(ty) {
+            if let Some(base) = type_base_name(inner_ty) {
                 if inner_type_names.contains(&base.as_str()) {
                     return field.ident.as_ref();
                 }
@@ -251,36 +166,6 @@ fn find_field_by_account_inner_type<'a>(
         }
     }
     None
-}
-
-/// Extract the inner type T from Account<T> or similar wrapper, handling
-/// references.
-fn extract_account_inner_type(ty: &Type) -> Option<proc_macro2::TokenStream> {
-    let deref_ty = match ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    extract_generic_inner_type(deref_ty, "Account").map(|inner| quote!(#inner))
-}
-
-/// Check if the inner type T of Account<T> has a lifetime parameter,
-/// indicating a dynamic account type (e.g., Account<Profile<'info>>).
-fn is_dynamic_account_type(ty: &Type) -> bool {
-    let deref_ty = match ty {
-        Type::Reference(r) => &*r.elem,
-        other => other,
-    };
-    if let Some(Type::Path(type_path)) = extract_generic_inner_type(deref_ty, "Account") {
-        if let Some(last) = type_path.path.segments.last() {
-            if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-                return args
-                    .args
-                    .iter()
-                    .any(|arg| matches!(arg, syn::GenericArgument::Lifetime(_)));
-            }
-        }
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +194,9 @@ struct DetectedFields<'a> {
 
     // Rent sysvar (needed by metadata/master_edition CPI)
     rent: Option<&'a Ident>,
+
+    // Sysvar<Rent> field (if present, avoids sol_get_rent_sysvar syscall for init)
+    rent_sysvar: Option<&'a Ident>,
 }
 
 impl<'a> DetectedFields<'a> {
@@ -354,6 +242,17 @@ impl<'a> DetectedFields<'a> {
 
         let rent = find_field_by_name(fields, "rent");
 
+        // Find Sysvar<Rent> field by checking Sysvar<T> where T = Rent.
+        let rent_sysvar = fields.iter().find_map(|field| {
+            let ty = strip_ref(&field.ty);
+            if let FieldKind::Sysvar { inner_ty } = FieldKind::classify(ty) {
+                if type_base_name(inner_ty).as_deref() == Some("Rent") {
+                    return field.ident.as_ref();
+                }
+            }
+            None
+        });
+
         DetectedFields {
             system_program,
             token_program,
@@ -367,6 +266,7 @@ impl<'a> DetectedFields<'a> {
             mint_authority,
             update_authority,
             rent,
+            rent_sysvar,
         }
     }
 
@@ -379,47 +279,14 @@ impl<'a> DetectedFields<'a> {
     }
 }
 
-/// Wrap a CPI body with the init/init_if_needed guard pattern.
-///
-/// - `init`: reject if already initialized, then run CPI body.
-/// - `init_if_needed`: if uninitialized run CPI body, else run validation (if
-///   provided).
-fn wrap_init_block(
-    field_name: &Ident,
-    init_if_needed: bool,
-    cpi_body: proc_macro2::TokenStream,
-    validate_existing: Option<proc_macro2::TokenStream>,
-) -> proc_macro2::TokenStream {
-    if init_if_needed {
-        let validate = validate_existing.unwrap_or_default();
-        quote! {
-            {
-                if quasar_lang::is_system_program(#field_name.owner()) {
-                    #cpi_body
-                } else {
-                    #validate
-                }
-            }
-        }
-    } else {
-        quote! {
-            {
-                if !quasar_lang::is_system_program(#field_name.owner()) {
-                    return Err(ProgramError::AccountAlreadyInitialized);
-                }
-                #cpi_body
-            }
-        }
-    }
-}
-
 /// Validate attribute combinations on a single field. Returns a compile error
 /// on conflict.
 fn validate_field_attrs(
     field: &syn::Field,
     field_name: &Ident,
     attrs: &AccountFieldAttrs,
-    is_ref_mut: bool,
+    kind: &FieldKind,
+    flags: &FieldFlags,
 ) -> Result<(), proc_macro::TokenStream> {
     // Helper: emit a compile error attached to the field name.
     macro_rules! reject {
@@ -433,19 +300,18 @@ fn validate_field_attrs(
     }
 
     let is_init = attrs.is_init || attrs.init_if_needed;
-    let is_writable = is_ref_mut || attrs.is_mut;
 
     // Mutability requirements
     reject!(
-        is_init && !is_writable,
+        is_init && !flags.is_writable,
         "#[account(init)] requires `&mut` reference or `#[account(mut)]`"
     );
     reject!(
-        attrs.close.is_some() && !is_writable,
+        attrs.close.is_some() && !flags.is_writable,
         "#[account(close)] requires `&mut` reference or `#[account(mut)]`"
     );
     reject!(
-        attrs.realloc.is_some() && !is_writable,
+        attrs.realloc.is_some() && !flags.is_writable,
         "#[account(realloc)] requires `&mut` reference or `#[account(mut)]`"
     );
 
@@ -463,18 +329,18 @@ fn validate_field_attrs(
         "#[account(realloc)] and #[account(init)] cannot be used on the same field"
     );
     reject!(
-        attrs.realloc.is_some() && is_token_or_mint_field(field),
+        attrs.realloc.is_some() && kind.is_token_or_mint(),
         "#[account(realloc)] cannot be used on token or mint accounts — their size is fixed by \
          the token program"
     );
 
     // Sweep validations
     reject!(
-        attrs.sweep.is_some() && !is_writable,
+        attrs.sweep.is_some() && !flags.is_writable,
         "#[account(sweep)] requires `&mut` reference or `#[account(mut)]`"
     );
     reject!(
-        attrs.sweep.is_some() && !is_token_account_field(field),
+        attrs.sweep.is_some() && !kind.is_token_account(),
         "#[account(sweep)] is only valid on token accounts, not mint accounts"
     );
     reject!(
@@ -618,7 +484,7 @@ pub(super) fn process_fields(
 
     // --- Validate required fields per feature ---
 
-    let _system_program_field = if has_any_init {
+    let system_program_field = if has_any_init {
         Some(DetectedFields::require(
             detected.system_program,
             "#[account(init)] requires a `Program<System>` field in the accounts struct",
@@ -673,10 +539,9 @@ pub(super) fn process_fields(
     }
 
     // Close on token/mint types requires a token program field for CPI close.
-    let has_any_token_close = field_attrs
-        .iter()
-        .zip(fields.iter())
-        .any(|(a, f)| a.close.is_some() && is_token_or_mint_field(f));
+    let has_any_token_close = field_attrs.iter().zip(fields.iter()).any(|(a, f)| {
+        a.close.is_some() && FieldKind::classify(strip_ref(&f.ty)).is_token_or_mint()
+    });
 
     // Sweep requires a token program field for transfer_checked CPI.
     let has_any_sweep = field_attrs.iter().any(|a| a.sweep.is_some());
@@ -691,7 +556,10 @@ pub(super) fn process_fields(
                 || (a.associated_token_mint.is_some()
                     && a.associated_token_token_program.is_none())
                 || a.mint_decimals.is_some();
-            !is_init && needs_program && is_interface_account_field(f)
+            let ty = strip_ref(&f.ty);
+            !is_init
+                && needs_program
+                && matches!(FieldKind::classify(ty), FieldKind::InterfaceAccount { .. })
         });
 
     let token_program_field = if has_any_token_init
@@ -793,10 +661,7 @@ pub(super) fn process_fields(
     };
 
     let mut field_constructs: Vec<proc_macro2::TokenStream> = Vec::new();
-    let mut has_one_checks: Vec<proc_macro2::TokenStream> = Vec::new();
-    let mut constraint_checks: Vec<proc_macro2::TokenStream> = Vec::new();
-    let mut mut_checks: Vec<proc_macro2::TokenStream> = Vec::new();
-    let mut pda_checks: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut field_checks: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut bump_init_vars: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut bump_struct_fields: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut bump_struct_inits: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -806,6 +671,7 @@ pub(super) fn process_fields(
     let mut init_blocks: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut close_fields: Vec<CloseFieldInfo> = Vec::new();
     let mut sweep_fields: Vec<SweepFieldInfo> = Vec::new();
+    let mut needs_rent = false;
 
     for (field, attrs) in fields.iter().zip(field_attrs.iter()) {
         let field_name = field.ident.as_ref().unwrap();
@@ -813,140 +679,149 @@ pub(super) fn process_fields(
         let is_optional = extract_generic_inner_type(&field.ty, "Option").is_some();
         let effective_ty = extract_generic_inner_type(&field.ty, "Option").unwrap_or(&field.ty);
         let is_ref_mut = matches!(effective_ty, Type::Reference(r) if r.mutability.is_some());
+        let underlying_ty = strip_ref(effective_ty);
+        let kind = FieldKind::classify(underlying_ty);
+        let flags = FieldFlags::compute(&kind, attrs, is_ref_mut);
+        let is_dynamic = kind.is_dynamic();
 
-        validate_field_attrs(field, field_name, attrs, is_ref_mut)?;
-
-        let is_dynamic = is_dynamic_account_type(effective_ty);
-        let underlying_ty = match effective_ty {
-            Type::Reference(type_ref) => &*type_ref.elem,
-            other => other,
-        };
+        validate_field_attrs(field, field_name, attrs, &kind, &flags)?;
 
         // Generate type-specific validation (owner, discriminator, address).
         // Flags are already validated via u32 header in parse_accounts.
         //
-        // For init/init_if_needed fields with token/mint/ATA attrs, skip
-        // Account<T> and InterfaceAccount<T> checks here — the init block's
-        // inline validation handles everything (owner, data_len,
-        // is_initialized, field-specific). This avoids redundant key
-        // comparisons and saves CUs. For generic Account<T> init_if_needed
-        // (no token/mint attrs), keep mut_checks since the init block has
-        // no validate_existing and these are the only defense.
-        let has_inline_validation = attrs.token_mint.is_some()
+        // Skip the generic Account<T>/InterfaceAccount<T> owner + data_len
+        // checks when a more specific validation will run for the same field:
+        //
+        //   1. init / init_if_needed — the init block's inline validation covers owner,
+        //      data_len, is_initialized, and field-specific checks. Generic Account<T>
+        //      init_if_needed also validates inline (owner + discriminator in the
+        //      else-branch).
+        //
+        //   2. Non-init fields with token/mint/ATA attrs — `validate_token_account`,
+        //      `validate_mint`, or `validate_ata` already checks owner + data_len as
+        //      their first two operations. Running CheckOwner + AccountCheck beforehand
+        //      is pure redundancy (~60 CU per field).
+        //
+        //   3. Dynamic Account<T<'info>> fields — `T::from_account_view()` in the field
+        //      construct already calls check_owner + AccountCheck::check
+        //      (dynamic.rs:421-422). Running them again in field_checks is redundant
+        //      (~50-80 CU per dynamic field).
+        let has_validate_call = attrs.token_mint.is_some()
             || attrs.associated_token_mint.is_some()
             || attrs.mint_decimals.is_some();
-        let skip_mut_checks = (attrs.is_init || attrs.init_if_needed) && has_inline_validation;
-        let mut push_check = |check: proc_macro2::TokenStream| {
-            if is_optional {
-                mut_checks.push(quote! { if let Some(ref #field_name) = #field_name { #check } });
-            } else {
-                mut_checks.push(check);
-            }
-        };
+        let skip_mut_checks = attrs.is_init
+            || (attrs.init_if_needed
+                && matches!(
+                    kind,
+                    FieldKind::Account { .. } | FieldKind::InterfaceAccount { .. }
+                ))
+            || (has_validate_call
+                && matches!(
+                    kind,
+                    FieldKind::Account { .. } | FieldKind::InterfaceAccount { .. }
+                ))
+            || (is_dynamic && matches!(kind, FieldKind::Account { .. }));
+        let mut this_field_checks: Vec<proc_macro2::TokenStream> = Vec::new();
 
-        if let Some(inner_ty) = extract_generic_inner_type(underlying_ty, "Account") {
-            if !skip_mut_checks {
+        match &kind {
+            FieldKind::Account { inner_ty } => {
+                if !skip_mut_checks {
+                    let field_name_str = field_name.to_string();
+                    let owner = debug_checked(
+                        &field_name_str,
+                        quote! { <#inner_ty as quasar_lang::traits::CheckOwner>::check_owner(#field_name.to_account_view()) },
+                        "Owner check failed for account '{}'",
+                    );
+                    let disc = debug_checked(
+                        &field_name_str,
+                        quote! { <#inner_ty as quasar_lang::traits::AccountCheck>::check(#field_name.to_account_view()) },
+                        "Discriminator check failed for account '{}': data may be uninitialized \
+                         or corrupted",
+                    );
+                    this_field_checks.push(quote! {
+                        #owner
+                        #disc
+                    });
+                }
+            }
+            FieldKind::InterfaceAccount { inner_ty } => {
+                if !skip_mut_checks {
+                    let field_name_str = field_name.to_string();
+                    let disc = debug_checked(
+                        &field_name_str,
+                        quote! { <#inner_ty as quasar_lang::traits::AccountCheck>::check(#field_name.to_account_view()) },
+                        "Account check failed for interface account '{}': data may be \
+                         uninitialized or corrupted",
+                    );
+                    let owner_guard = debug_guard(
+                        quote! {
+                            {
+                                let __owner = #field_name.to_account_view().owner();
+                                !quasar_lang::keys_eq(__owner, &quasar_spl::SPL_TOKEN_ID)
+                                    && !quasar_lang::keys_eq(__owner, &quasar_spl::TOKEN_2022_ID)
+                            }
+                        },
+                        quote! { ::alloc::format!(
+                            "Owner check failed for interface account '{}': not owned by SPL Token or Token-2022",
+                            #field_name_str
+                        ) },
+                        quote! { ProgramError::IllegalOwner },
+                    );
+                    this_field_checks.push(quote! {
+                        #owner_guard
+                        #disc
+                    });
+                }
+            }
+            FieldKind::Sysvar { inner_ty } => {
                 let field_name_str = field_name.to_string();
-                push_check(quote! {
-                    #[cfg(feature = "debug")]
-                    if let Err(e) = <#inner_ty as quasar_lang::traits::CheckOwner>::check_owner(#field_name.to_account_view()) {
-                        quasar_lang::prelude::log(&::alloc::format!("Owner check failed for account '{}'", #field_name_str));
-                        return Err(e);
-                    }
-                    #[cfg(not(feature = "debug"))]
-                    <#inner_ty as quasar_lang::traits::CheckOwner>::check_owner(#field_name.to_account_view())?;
-
-                    #[cfg(feature = "debug")]
-                    if let Err(e) = <#inner_ty as quasar_lang::traits::AccountCheck>::check(#field_name.to_account_view()) {
-                        quasar_lang::prelude::log(&::alloc::format!("Discriminator check failed for account '{}': data may be uninitialized or corrupted", #field_name_str));
-                        return Err(e);
-                    }
-                    #[cfg(not(feature = "debug"))]
-                    <#inner_ty as quasar_lang::traits::AccountCheck>::check(#field_name.to_account_view())?;
-                });
-            }
-        } else if let Some(inner_ty) = extract_generic_inner_type(underlying_ty, "InterfaceAccount")
-        {
-            if !skip_mut_checks {
-                let field_name_str = field_name.to_string();
-                push_check(quote! {
-                    {
-                        let __owner = #field_name.to_account_view().owner();
-                        if quasar_lang::utils::hint::unlikely(
-                            !quasar_lang::keys_eq(__owner, &quasar_spl::SPL_TOKEN_ID)
-                                && !quasar_lang::keys_eq(__owner, &quasar_spl::TOKEN_2022_ID)
-                        ) {
-                            #[cfg(feature = "debug")]
-                            quasar_lang::prelude::log(&::alloc::format!(
-                                "Owner check failed for interface account '{}': not owned by SPL Token or Token-2022",
-                                #field_name_str
-                            ));
-                            return Err(ProgramError::IllegalOwner);
-                        }
-                    }
-
-                    #[cfg(feature = "debug")]
-                    if let Err(e) = <#inner_ty as quasar_lang::traits::AccountCheck>::check(#field_name.to_account_view()) {
-                        quasar_lang::prelude::log(&::alloc::format!("Account check failed for interface account '{}': data may be uninitialized or corrupted", #field_name_str));
-                        return Err(e);
-                    }
-                    #[cfg(not(feature = "debug"))]
-                    <#inner_ty as quasar_lang::traits::AccountCheck>::check(#field_name.to_account_view())?;
-                });
-            }
-        } else if let Some(inner_ty) = extract_generic_inner_type(underlying_ty, "Sysvar") {
-            let field_name_str = field_name.to_string();
-            push_check(quote! {
-                if #field_name.to_account_view().address() != &<#inner_ty as quasar_lang::sysvars::Sysvar>::ID {
-                    #[cfg(feature = "debug")]
-                    quasar_lang::prelude::log(&::alloc::format!(
+                this_field_checks.push(debug_guard(
+                    quote! { !quasar_lang::keys_eq(#field_name.to_account_view().address(), &<#inner_ty as quasar_lang::sysvars::Sysvar>::ID) },
+                    quote! { ::alloc::format!(
                         "Incorrect sysvar address for account '{}': expected {}, got {}",
                         #field_name_str,
                         <#inner_ty as quasar_lang::sysvars::Sysvar>::ID,
                         #field_name.to_account_view().address()
-                    ));
-                    return Err(ProgramError::IncorrectProgramId);
-                }
-            });
-        } else if let Some(inner_ty) = extract_generic_inner_type(underlying_ty, "Program") {
-            let field_name_str = field_name.to_string();
-            push_check(quote! {
-                if *#field_name.to_account_view().address() != <#inner_ty as quasar_lang::traits::Id>::ID {
-                    #[cfg(feature = "debug")]
-                    quasar_lang::prelude::log(&::alloc::format!(
+                    ) },
+                    quote! { ProgramError::IncorrectProgramId },
+                ));
+            }
+            FieldKind::Program { inner_ty } => {
+                let field_name_str = field_name.to_string();
+                this_field_checks.push(debug_guard(
+                    quote! { !quasar_lang::keys_eq(#field_name.to_account_view().address(), &<#inner_ty as quasar_lang::traits::Id>::ID) },
+                    quote! { ::alloc::format!(
                         "Incorrect program ID for account '{}': expected {}, got {}",
                         #field_name_str,
                         <#inner_ty as quasar_lang::traits::Id>::ID,
                         #field_name.to_account_view().address()
-                    ));
-                    return Err(ProgramError::IncorrectProgramId);
-                }
-            });
-        } else if let Some(inner_ty) = extract_generic_inner_type(underlying_ty, "Interface") {
-            let field_name_str = field_name.to_string();
-            push_check(quote! {
-                if !<#inner_ty as quasar_lang::traits::ProgramInterface>::matches(#field_name.to_account_view().address()) {
-                    #[cfg(feature = "debug")]
-                    quasar_lang::prelude::log(&::alloc::format!(
+                    ) },
+                    quote! { ProgramError::IncorrectProgramId },
+                ));
+            }
+            FieldKind::Interface { inner_ty } => {
+                let field_name_str = field_name.to_string();
+                this_field_checks.push(debug_guard(
+                    quote! { !<#inner_ty as quasar_lang::traits::ProgramInterface>::matches(#field_name.to_account_view().address()) },
+                    quote! { ::alloc::format!(
                         "Program interface mismatch for account '{}': address {} does not match any allowed programs",
                         #field_name_str,
                         #field_name.to_account_view().address()
-                    ));
-                    return Err(ProgramError::IncorrectProgramId);
-                }
-            });
-        } else if type_base_name(&field.ty).as_deref() == Some("SystemAccount") {
-            let field_name_str = field_name.to_string();
-            let base_type = strip_generics(underlying_ty);
-            push_check(quote! {
-                #[cfg(feature = "debug")]
-                if let Err(e) = <#base_type as quasar_lang::checks::Owner>::check(#field_name.to_account_view()) {
-                    quasar_lang::prelude::log(&::alloc::format!("Owner check failed for account '{}': not owned by system program", #field_name_str));
-                    return Err(e);
-                }
-                #[cfg(not(feature = "debug"))]
-                <#base_type as quasar_lang::checks::Owner>::check(#field_name.to_account_view())?;
-            });
+                    ) },
+                    quote! { ProgramError::IncorrectProgramId },
+                ));
+            }
+            FieldKind::SystemAccount => {
+                let field_name_str = field_name.to_string();
+                let base_type = strip_generics(underlying_ty);
+                let owner = debug_checked(
+                    &field_name_str,
+                    quote! { <#base_type as quasar_lang::checks::Owner>::check(#field_name.to_account_view()) },
+                    "Owner check failed for account '{}': not owned by system program",
+                );
+                this_field_checks.push(owner);
+            }
+            FieldKind::Signer | FieldKind::Other => {}
         }
 
         // Field construction — flags already validated via header check
@@ -958,52 +833,50 @@ pub(super) fn process_fields(
             }
         };
 
-        match effective_ty {
-            Type::Reference(type_ref) if !is_dynamic => {
-                let base_type = strip_generics(&type_ref.elem);
-                let expr = if type_ref.mutability.is_some() {
-                    quote! { unsafe { #base_type::from_account_view_unchecked_mut(#field_name) } }
-                } else {
-                    quote! { unsafe { #base_type::from_account_view_unchecked(#field_name) } }
-                };
-                field_constructs.push(construct(expr));
-            }
-            _ if is_dynamic => {
-                if let Some(inner) = extract_generic_inner_type(underlying_ty, "Account") {
-                    let inner_base = strip_generics(inner);
-                    field_constructs.push(construct(
-                        quote! { #inner_base::from_account_view(#field_name)? },
-                    ));
-                } else {
-                    let base_type = strip_generics(effective_ty);
-                    field_constructs
-                        .push(quote! { #field_name: #base_type::from_account_view(#field_name)? });
-                }
-            }
-            _ => {
-                let base_type = strip_generics(effective_ty);
+        if is_dynamic {
+            // Dynamic accounts (Account<T<'info>>): fallible parse from account view
+            if let FieldKind::Account { inner_ty } = &kind {
+                let inner_base = strip_generics(inner_ty);
                 field_constructs.push(construct(
-                    quote! { unsafe { #base_type::from_account_view_unchecked(#field_name) } },
+                    quote! { #inner_base::from_account_view(#field_name)? },
                 ));
+            } else {
+                let base_type = strip_generics(effective_ty);
+                field_constructs
+                    .push(quote! { #field_name: #base_type::from_account_view(#field_name)? });
             }
+        } else if let Type::Reference(type_ref) = effective_ty {
+            // &T or &mut T: zero-copy from account view
+            let base_type = strip_generics(&type_ref.elem);
+            let expr = if type_ref.mutability.is_some() {
+                quote! { unsafe { #base_type::from_account_view_unchecked_mut(#field_name) } }
+            } else {
+                quote! { unsafe { #base_type::from_account_view_unchecked(#field_name) } }
+            };
+            field_constructs.push(construct(expr));
+        } else {
+            // Bare types (Signer, SystemAccount, UncheckedAccount, etc.)
+            let base_type = strip_generics(effective_ty);
+            field_constructs.push(construct(
+                quote! { unsafe { #base_type::from_account_view_unchecked(#field_name) } },
+            ));
         }
 
+        let field_name_str = field_name.to_string();
         for (target, custom_error) in &attrs.has_ones {
             let error = match custom_error {
                 Some(err) => quote! { #err.into() },
                 None => quote! { QuasarError::HasOneMismatch.into() },
             };
-            let check = quote! {
-                if #field_name.#target != *#target.to_account_view().address() {
-                    return Err(#error);
-                }
-            };
-            if is_optional {
-                has_one_checks
-                    .push(quote! { if let Some(ref #field_name) = #field_name { #check } });
-            } else {
-                has_one_checks.push(check);
-            }
+            let target_str = target.to_string();
+            this_field_checks.push(debug_guard(
+                quote! { !quasar_lang::keys_eq(&#field_name.#target, #target.to_account_view().address()) },
+                quote! { ::alloc::format!(
+                    "has_one mismatch: '{}.{}' does not match account '{}'",
+                    #field_name_str, #target_str, #target_str,
+                ) },
+                quote! { #error },
+            ));
         }
 
         for (expr, custom_error) in &attrs.constraints {
@@ -1011,17 +884,15 @@ pub(super) fn process_fields(
                 Some(err) => quote! { #err.into() },
                 None => quote! { QuasarError::ConstraintViolation.into() },
             };
-            let check = quote! {
-                if !(#expr) {
-                    return Err(#error);
-                }
-            };
-            if is_optional {
-                constraint_checks
-                    .push(quote! { if let Some(ref #field_name) = #field_name { #check } });
-            } else {
-                constraint_checks.push(check);
-            }
+            let expr_str = quote!(#expr).to_string();
+            this_field_checks.push(debug_guard(
+                quote! { !(#expr) },
+                quote! { ::alloc::format!(
+                    "Constraint violated on '{}': `{}`",
+                    #field_name_str, #expr_str,
+                ) },
+                quote! { #error },
+            ));
         }
 
         if let Some((addr_expr, custom_error)) = &attrs.address {
@@ -1029,23 +900,21 @@ pub(super) fn process_fields(
                 Some(err) => quote! { #err.into() },
                 None => quote! { QuasarError::AddressMismatch.into() },
             };
-            let check = quote! {
-                if *#field_name.to_account_view().address() != #addr_expr {
-                    return Err(#error);
-                }
-            };
-            if is_optional {
-                constraint_checks
-                    .push(quote! { if let Some(ref #field_name) = #field_name { #check } });
-            } else {
-                constraint_checks.push(check);
-            }
+            this_field_checks.push(debug_guard(
+                quote! { !quasar_lang::keys_eq(#field_name.to_account_view().address(), &#addr_expr) },
+                quote! { ::alloc::format!(
+                    "Address mismatch on '{}': got {}",
+                    #field_name_str,
+                    #field_name.to_account_view().address(),
+                ) },
+                quote! { #error },
+            ));
         }
 
         // --- Close field tracking ---
 
         if let Some(dest) = &attrs.close {
-            let cpi_close = if is_token_or_mint_field(field) {
+            let cpi_close = if kind.is_token_or_mint() {
                 // Token/mint accounts require CPI close via the token program.
                 // Resolve the authority from token::authority (or associated_token::authority).
                 let authority = attrs
@@ -1102,7 +971,7 @@ pub(super) fn process_fields(
                     .to_compile_error()
                     .into()
                 })?;
-            if !is_token_account_field(receiver_field) {
+            if !FieldKind::classify(strip_ref(&receiver_field.ty)).is_token_account() {
                 return Err(syn::Error::new_spanned(
                     receiver,
                     "sweep target must be a token account (Account<Token>, Account<Token2022>, or \
@@ -1129,7 +998,7 @@ pub(super) fn process_fields(
             if let Some(auth_name) = &attrs.token_authority {
                 let auth_field = fields.iter().find(|f| f.ident.as_ref() == Some(auth_name));
                 if let Some(af) = auth_field {
-                    if !is_signer_field(af) {
+                    if !matches!(FieldKind::classify(strip_ref(&af.ty)), FieldKind::Signer) {
                         return Err(syn::Error::new_spanned(
                             auth_name,
                             "sweep requires `token::authority` to be a Signer (it must sign the \
@@ -1233,11 +1102,11 @@ pub(super) fn process_fields(
                     }
                 })
                 .collect();
-            // Choose target: init_pda_checks for init fields, pda_checks for others
+            // Choose target: init_pda_checks for init fields, this_field_checks for others
             let target_checks = if is_init_field {
                 &mut init_pda_checks
             } else {
-                &mut pda_checks
+                &mut this_field_checks
             };
 
             // Init fields are still raw &AccountView at PDA check time;
@@ -1261,12 +1130,7 @@ pub(super) fn process_fields(
                             #bump_var = __bump_val;
                         }
                     };
-                    if is_optional && !is_init_field {
-                        target_checks
-                            .push(quote! { if let Some(ref #field_name) = #field_name { #check } });
-                    } else {
-                        target_checks.push(check);
-                    }
+                    target_checks.push(check);
                 }
                 Some(None) => {
                     // --- PDA bump auto-detection ---
@@ -1308,15 +1172,21 @@ pub(super) fn process_fields(
                         // Try inner account's BUMP_OFFSET (non-init only — init accounts don't have
                         // data yet). Extract inner type T from Account<T>
                         // for BUMP_OFFSET lookup.
-                        let inner_ty = extract_generic_inner_type(underlying_ty, "Account");
-
-                        if let Some(inner_ty) = inner_ty {
+                        if let FieldKind::Account { inner_ty } = &kind {
                             // Account<T>: use BUMP_OFFSET if available, else find
                             let view_access = quote! { #field_name.to_account_view() };
                             quote! {
                                 {
                                     #(#seed_len_checks)*
                                     if let Some(__offset) = <#inner_ty as Discriminator>::BUMP_OFFSET {
+                                        if quasar_lang::utils::hint::unlikely(__offset >= #view_access.data_len()) {
+                                            #[cfg(feature = "debug")]
+                                            quasar_lang::prelude::log(concat!(
+                                                "BUMP_OFFSET out of bounds for account '",
+                                                stringify!(#field_name), "'"
+                                            ));
+                                            return Err(ProgramError::AccountDataTooSmall);
+                                        }
                                         let __bump_val: u8 = unsafe { *#view_access.data_ptr().add(__offset) };
                                         let __bump_ref: &[u8] = &[__bump_val];
                                         let __pda_seeds = [#(#seed_idents,)* __bump_ref];
@@ -1361,12 +1231,7 @@ pub(super) fn process_fields(
                         }
                     };
 
-                    if is_optional && !is_init_field {
-                        target_checks
-                            .push(quote! { if let Some(ref #field_name) = #field_name { #check } });
-                    } else {
-                        target_checks.push(check);
-                    }
+                    target_checks.push(check);
                 }
                 None => {
                     return Err(syn::Error::new_spanned(
@@ -1420,208 +1285,36 @@ pub(super) fn process_fields(
         // --- Init code generation ---
 
         if is_init_field {
-            let is_token_init = attrs.token_mint.is_some();
-            let is_ata_init = attrs.associated_token_mint.is_some();
-            let has_pda = attrs.seeds.is_some();
-            let pay_field = payer_field.unwrap();
-
-            // Build the PDA signing code (if applicable)
-            let invoke_expr = if has_pda {
-                let bump_var = format_ident!("__bumps_{}", field_name);
-                let seed_exprs = attrs.seeds.as_ref().unwrap();
-                let seed_slices: Vec<proc_macro2::TokenStream> = seed_exprs
-                    .iter()
-                    .map(|expr| seed_slice_expr_for_parse(expr, field_name_strings))
-                    .collect();
-                quote! {
-                    let __init_bump_ref: &[u8] = &[#bump_var];
-                    let __init_signer_seeds = [#(quasar_lang::cpi::Seed::from(#seed_slices),)* quasar_lang::cpi::Seed::from(__init_bump_ref)];
-                    __init_cpi.invoke_signed(&__init_signer_seeds)?;
-                }
-            } else {
-                quote! { __init_cpi.invoke()?; }
+            let init_ctx = super::init::InitContext {
+                payer: payer_field.unwrap(),
+                system_program: system_program_field.unwrap(),
+                token_program: token_program_field,
+                ata_program: ata_program_field,
+                metadata_account: metadata_account_field,
+                master_edition_account: master_edition_account_field,
+                metadata_program: metadata_program_field,
+                mint_authority: mint_authority_field,
+                update_authority: update_authority_field,
+                rent: rent_field,
+                field_name_strings,
             };
 
-            if is_ata_init {
-                let ata_prog = ata_program_field.unwrap();
-                let mint_field = attrs.associated_token_mint.as_ref().unwrap();
-                let auth_field = attrs.associated_token_authority.as_ref().unwrap();
-                let sys_field = _system_program_field.unwrap();
-                let tok_field = attrs
-                    .associated_token_token_program
-                    .as_ref()
-                    .unwrap_or_else(|| token_program_field.unwrap());
-                let token_program_addr = if let Some(tp) = &attrs.associated_token_token_program {
-                    quote! { #tp.address() }
-                } else {
-                    let tp = token_program_field.unwrap();
-                    quote! { #tp.address() }
-                };
+            if let Some(result) =
+                super::init::gen_init_block(field_name, attrs, effective_ty, &init_ctx)?
+            {
+                init_blocks.push(result.tokens);
+                needs_rent |= result.uses_rent;
+            }
 
-                let ata_cpi = |instruction_byte: u8| {
-                    quote! {
-                        quasar_lang::cpi::CpiCall::new(
-                            #ata_prog.address(),
-                            [
-                                quasar_lang::cpi::InstructionAccount::writable_signer(#pay_field.address()),
-                                quasar_lang::cpi::InstructionAccount::writable(#field_name.address()),
-                                quasar_lang::cpi::InstructionAccount::readonly(#auth_field.address()),
-                                quasar_lang::cpi::InstructionAccount::readonly(#mint_field.address()),
-                                quasar_lang::cpi::InstructionAccount::readonly(#sys_field.address()),
-                                quasar_lang::cpi::InstructionAccount::readonly(#tok_field.address()),
-                            ],
-                            [#pay_field, #field_name, #auth_field, #mint_field, #sys_field, #tok_field],
-                            [#instruction_byte],
-                        ).invoke()?;
-                    }
-                };
+            // Metadata CPI (does not use __shared_rent)
+            if let Some(block) = super::init::gen_metadata_init(field_name, attrs, &init_ctx) {
+                init_blocks.push(block);
+            }
 
-                let validate = quote! {
-                    quasar_spl::validate_ata(
-                        #field_name.to_account_view(),
-                        #auth_field.to_account_view().address(),
-                        #mint_field.to_account_view().address(),
-                        #token_program_addr,
-                    )?;
-                };
-                // ATA: create_idempotent (1) for init_if_needed, create (0) for init
-                init_blocks.push(wrap_init_block(
-                    field_name,
-                    attrs.init_if_needed,
-                    ata_cpi(if attrs.init_if_needed { 1 } else { 0 }),
-                    Some(validate),
-                ));
-            } else if is_token_init {
-                let tok_field = token_program_field.unwrap();
-                let mint_field = attrs.token_mint.as_ref().unwrap();
-                let auth_field = attrs.token_authority.as_ref().unwrap();
-
-                let cpi_body = quote! {
-                    let __init_lamports = __shared_rent.try_minimum_balance(
-                        quasar_spl::TokenAccountState::LEN
-                    )?;
-                    let __init_cpi = quasar_lang::cpi::system::create_account(
-                        #pay_field, #field_name, __init_lamports,
-                        quasar_spl::TokenAccountState::LEN as u64,
-                        #tok_field.address(),
-                    );
-                    #invoke_expr
-                    quasar_spl::initialize_account3(
-                        #tok_field, #field_name, #mint_field, #auth_field.address(),
-                    ).invoke()?;
-                };
-                let tok_addr = quote! { #tok_field.address() };
-                let validate = quote! {
-                    quasar_spl::validate_token_account(
-                        #field_name.to_account_view(),
-                        #mint_field.to_account_view().address(),
-                        #auth_field.to_account_view().address(),
-                        #tok_addr,
-                    )?;
-                };
-                init_blocks.push(wrap_init_block(
-                    field_name,
-                    attrs.init_if_needed,
-                    cpi_body,
-                    Some(validate),
-                ));
-            } else if let Some(decimals_expr) = attrs.mint_decimals.as_ref() {
-                let tok_field = token_program_field.unwrap();
-                let auth_field = match attrs.mint_init_authority.as_ref() {
-                    Some(f) => f,
-                    None => {
-                        return Err(syn::Error::new_spanned(
-                            field_name,
-                            "`mint::decimals` requires `mint::authority = <field>`",
-                        )
-                        .to_compile_error()
-                        .into());
-                    }
-                };
-                let freeze_expr = if let Some(freeze_field) = &attrs.mint_freeze_authority {
-                    quote! { Some(#freeze_field.address()) }
-                } else {
-                    quote! { None }
-                };
-
-                let cpi_body = quote! {
-                    let __init_lamports = __shared_rent.try_minimum_balance(
-                        quasar_spl::MintAccountState::LEN
-                    )?;
-                    let __init_cpi = quasar_lang::cpi::system::create_account(
-                        #pay_field, #field_name, __init_lamports,
-                        quasar_spl::MintAccountState::LEN as u64,
-                        #tok_field.address(),
-                    );
-                    #invoke_expr
-                    quasar_spl::initialize_mint2(
-                        #tok_field, #field_name,
-                        (#decimals_expr) as u8,
-                        #auth_field.address(),
-                        #freeze_expr,
-                    ).invoke()?;
-                };
-                let tok_addr = quote! { #tok_field.address() };
-                let freeze_expr_ref = if let Some(freeze_field) = &attrs.mint_freeze_authority {
-                    quote! { Some(#freeze_field.address()) }
-                } else {
-                    quote! { None }
-                };
-                let validate = quote! {
-                    quasar_spl::validate_mint(
-                        #field_name.to_account_view(),
-                        #auth_field.to_account_view().address(),
-                        (#decimals_expr) as u8,
-                        #freeze_expr_ref,
-                        #tok_addr,
-                    )?;
-                };
-                init_blocks.push(wrap_init_block(
-                    field_name,
-                    attrs.init_if_needed,
-                    cpi_body,
-                    Some(validate),
-                ));
-            } else {
-                let inner_type = extract_account_inner_type(effective_ty);
-                if inner_type.is_none() {
-                    return Err(syn::Error::new_spanned(
-                        field_name,
-                        "#[account(init)] on non-Account<T> type requires `token::mint` and \
-                         `token::authority`, `associated_token::mint` and \
-                         `associated_token::authority`, or `mint::decimals` and `mint::authority`",
-                    )
-                    .to_compile_error()
-                    .into());
-                }
-                let inner_type = inner_type.unwrap();
-
-                let space_expr = if let Some(space) = &attrs.space {
-                    quote! { (#space) as u64 }
-                } else {
-                    quote! { <#inner_type as quasar_lang::traits::Space>::SPACE as u64 }
-                };
-
-                let cpi_body = quote! {
-                    let __init_space = #space_expr;
-                    let __init_lamports = __shared_rent.try_minimum_balance(__init_space as usize)?;
-                    let __init_cpi = quasar_lang::cpi::system::create_account(
-                        #pay_field, #field_name, __init_lamports, __init_space, &crate::ID,
-                    );
-                    #invoke_expr
-                    let __disc = <#inner_type as quasar_lang::traits::Discriminator>::DISCRIMINATOR;
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            __disc.as_ptr(), #field_name.data_mut_ptr(), __disc.len(),
-                        );
-                    }
-                };
-                init_blocks.push(wrap_init_block(
-                    field_name,
-                    attrs.init_if_needed,
-                    cpi_body,
-                    None,
-                ));
+            // Master edition CPI (does not use __shared_rent)
+            if let Some(block) = super::init::gen_master_edition_init(field_name, attrs, &init_ctx)
+            {
+                init_blocks.push(block);
             }
         }
 
@@ -1638,7 +1331,7 @@ pub(super) fn process_fields(
                 resolve_token_program_addr(effective_ty, token_program_field)
             };
 
-            pda_checks.push(quote! {
+            this_field_checks.push(quote! {
                 quasar_spl::validate_ata(
                     #field_name.to_account_view(),
                     #auth_field.to_account_view().address(),
@@ -1656,7 +1349,7 @@ pub(super) fn process_fields(
             attrs.token_authority.as_ref(),
         ) {
             let token_program_addr = resolve_token_program_addr(effective_ty, token_program_field);
-            pda_checks.push(quote! {
+            this_field_checks.push(quote! {
                 quasar_spl::validate_token_account(
                     #field_name.to_account_view(),
                     #mint_field.to_account_view().address(),
@@ -1679,7 +1372,7 @@ pub(super) fn process_fields(
             } else {
                 quote! { None }
             };
-            pda_checks.push(quote! {
+            this_field_checks.push(quote! {
                 quasar_spl::validate_mint(
                     #field_name.to_account_view(),
                     #auth_field.to_account_view().address(),
@@ -1694,6 +1387,7 @@ pub(super) fn process_fields(
 
         if let Some(realloc_expr) = &attrs.realloc {
             let realloc_pay = realloc_payer_field.unwrap();
+            needs_rent = true;
 
             init_blocks.push(quote! {
                 {
@@ -1705,79 +1399,23 @@ pub(super) fn process_fields(
             });
         }
 
-        // --- Metadata init CPI generation ---
-
-        if is_init_field {
-            if let Some(meta_name) = attrs.metadata_name.as_ref() {
-                let meta_symbol = attrs.metadata_symbol.as_ref().unwrap();
-                let meta_uri = attrs.metadata_uri.as_ref().unwrap();
-                let seller_fee = attrs
-                    .metadata_seller_fee_basis_points
-                    .as_ref()
-                    .map(|e| quote! { (#e) as u16 })
-                    .unwrap_or(quote! { 0u16 });
-                let is_mutable = attrs
-                    .metadata_is_mutable
-                    .as_ref()
-                    .map(|e| quote! { #e })
-                    .unwrap_or(quote! { false });
-
-                let meta_field = metadata_account_field.unwrap();
-                let meta_prog = metadata_program_field.unwrap();
-                let mint_auth = mint_authority_field.unwrap();
-                let update_auth = update_authority_field.unwrap();
-                let pay = payer_field.unwrap();
-                let sys = _system_program_field.unwrap();
-                let rent = rent_field.unwrap();
-
-                init_blocks.push(quote! {
-                    {
-                        quasar_spl::metadata::MetadataCpi::create_metadata_accounts_v3(
-                            #meta_prog, #meta_field, #field_name, #mint_auth,
-                            #pay, #update_auth, #sys, #rent,
-                            quasar_lang::borsh::BorshString::new(#meta_name),
-                            quasar_lang::borsh::BorshString::new(#meta_symbol),
-                            quasar_lang::borsh::BorshString::new(#meta_uri),
-                            #seller_fee, #is_mutable, true,
-                        ).invoke()?;
+        // --- Flush per-field checks ---
+        if !this_field_checks.is_empty() {
+            if is_optional {
+                field_checks.push(quote! {
+                    if let Some(ref #field_name) = #field_name {
+                        #(#this_field_checks)*
                     }
                 });
-            }
-
-            // --- Master Edition init CPI generation ---
-
-            if let Some(max_supply) = attrs.master_edition_max_supply.as_ref() {
-                let me_field = master_edition_account_field.unwrap();
-                let meta_field = metadata_account_field.unwrap();
-                let meta_prog = metadata_program_field.unwrap();
-                let mint_auth = mint_authority_field.unwrap();
-                let update_auth = update_authority_field.unwrap();
-                let pay = payer_field.unwrap();
-                let tok = token_program_field.unwrap();
-                let sys = _system_program_field.unwrap();
-                let rent = rent_field.unwrap();
-
-                init_blocks.push(quote! {
-                    {
-                        quasar_spl::metadata::MetadataCpi::create_master_edition_v3(
-                            #meta_prog, #me_field, #field_name, #update_auth,
-                            #mint_auth, #pay, #meta_field, #tok, #sys, #rent,
-                            Some(#max_supply as u64),
-                        ).invoke()?;
-                    }
-                });
+            } else {
+                field_checks.extend(this_field_checks);
             }
         }
     }
 
-    let needs_rent = !init_blocks.is_empty();
-
     Ok(ProcessedFields {
         field_constructs,
-        has_one_checks,
-        constraint_checks,
-        mut_checks,
-        pda_checks,
+        field_checks,
         bump_init_vars,
         bump_struct_fields,
         bump_struct_inits,
@@ -1789,6 +1427,7 @@ pub(super) fn process_fields(
         close_fields,
         sweep_fields,
         needs_rent,
+        rent_sysvar_field: detected.rent_sysvar.cloned(),
     })
 }
 
@@ -1799,32 +1438,10 @@ pub(super) fn determine_nodup_constant(
     attrs: &super::attrs::AccountFieldAttrs,
     is_ref_mut: bool,
 ) -> &'static str {
-    let type_name = type_base_name(&field.ty).unwrap_or_default();
-
-    // Program<T> and Interface<T> are always executable
-    let underlying_ty = match field.ty {
-        Type::Reference(ref type_ref) => &*type_ref.elem,
-        ref other => other,
-    };
-    if extract_generic_inner_type(underlying_ty, "Program").is_some()
-        || extract_generic_inner_type(underlying_ty, "Interface").is_some()
-    {
-        return "NODUP_EXECUTABLE";
-    }
-
-    // Determine signer requirement
-    let is_signer = type_name == "Signer"
-        || (attrs.is_init && attrs.seeds.is_none() && attrs.associated_token_mint.is_none());
-
-    // Determine writable requirement
-    let is_writable = is_ref_mut || attrs.is_mut;
-
-    match (is_signer, is_writable) {
-        (true, true) => "NODUP_MUT_SIGNER",
-        (true, false) => "NODUP_SIGNER",
-        (false, true) => "NODUP_MUT",
-        (false, false) => "NODUP",
-    }
+    // No Option stripping — only called for non-optional non-dup fields
+    let ty = strip_ref(&field.ty);
+    let kind = FieldKind::classify(ty);
+    FieldFlags::compute(&kind, attrs, is_ref_mut).nodup_constant()
 }
 
 /// Compute the expected u32 header value for a field based on its attributes
@@ -1840,37 +1457,8 @@ pub(super) fn compute_header_expected(
     attrs: &super::attrs::AccountFieldAttrs,
     is_ref_mut: bool,
 ) -> u32 {
-    let mut header: u32 = 0xFF; // byte 0: always no-dup (0xFF)
-
-    // Detect signer requirement from type name or init without seeds/PDA
-    let type_name = type_base_name(&field.ty).unwrap_or_default();
-    let is_signer = type_name == "Signer";
-    // Only init (not init_if_needed) without seeds/PDA requires signer (for
-    // pre-signing) init_if_needed accounts might already exist, so they won't
-    // necessarily be signers associated_token accounts are PDAs, so they're not
-    // signers
-    let is_init_without_seeds =
-        attrs.is_init && attrs.seeds.is_none() && attrs.associated_token_mint.is_none();
-    if is_signer || is_init_without_seeds {
-        header |= 0x01 << 8; // byte 1: is_signer = 1
-    }
-
-    // Detect writable requirement from &mut or #[account(mut)]
-    let is_writable = is_ref_mut || attrs.is_mut;
-    if is_writable {
-        header |= 0x01 << 16; // byte 2: is_writable = 1
-    }
-
-    // Detect executable requirement from Program<T> or Interface<T>
-    let underlying_ty = match field.ty {
-        Type::Reference(ref type_ref) => &*type_ref.elem,
-        ref other => other,
-    };
-    let is_program_generic = extract_generic_inner_type(underlying_ty, "Program").is_some();
-    let is_interface_generic = extract_generic_inner_type(underlying_ty, "Interface").is_some();
-    if is_program_generic || is_interface_generic {
-        header |= 0x01 << 24; // byte 3: executable = 1
-    }
-
-    header
+    let effective_ty = extract_generic_inner_type(&field.ty, "Option").unwrap_or(&field.ty);
+    let ty = strip_ref(effective_ty);
+    let kind = FieldKind::classify(ty);
+    FieldFlags::compute(&kind, attrs, is_ref_mut).header_constant()
 }

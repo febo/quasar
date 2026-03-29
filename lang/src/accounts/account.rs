@@ -3,6 +3,20 @@ use {
     solana_account_view::{RuntimeAccount, MAX_PERMITTED_DATA_INCREASE},
 };
 
+// keys_eq and all 32-byte comparisons assume Address is [u8; 32] with alignment
+// 1.
+const _: () = {
+    assert!(core::mem::size_of::<solana_address::Address>() == 32);
+    assert!(core::mem::align_of::<solana_address::Address>() == 1);
+};
+
+const _: () = {
+    assert!(
+        core::mem::offset_of!(RuntimeAccount, padding) == 0x04,
+        "RuntimeAccount::padding offset changed — resize() pointer arithmetic is invalid"
+    );
+};
+
 /// Resize account data, tracking the accumulated delta in the padding field.
 ///
 /// Upstream v2 removed `resize()`. This reimplements it using the `padding`
@@ -174,13 +188,7 @@ impl<T: AsAccountView> Account<T> {
     }
 }
 
-impl<T: Owner + AsAccountView> Account<T> {
-    /// Returns the expected owner program address for this account type.
-    #[inline(always)]
-    pub fn owner(&self) -> &'static Address {
-        &T::OWNER
-    }
-
+impl<T: Owner + AsAccountView + crate::traits::Discriminator> Account<T> {
     /// Close a program-owned account: zero discriminator, drain lamports,
     /// reassign to system program, resize to zero.
     ///
@@ -193,11 +201,16 @@ impl<T: Owner + AsAccountView> Account<T> {
             return Err(ProgramError::Immutable);
         }
 
-        // SAFETY: Zero up to 8 bytes (discriminator) at the start of account
-        // data. `data_mut_ptr()` is valid for `data_len` bytes, and `zero_len`
-        // is capped at min(data_len, 8).
-        let zero_len = view.data_len().min(8);
-        unsafe { core::ptr::write_bytes(view.data_mut_ptr(), 0, zero_len) };
+        // SAFETY: Zero the discriminator prefix. AccountCheck::check during
+        // parse verified data_len >= disc_len + sizeof(Zc), so disc_len is
+        // always in bounds.
+        unsafe {
+            core::ptr::write_bytes(
+                view.data_mut_ptr(),
+                0,
+                <T as crate::traits::Discriminator>::DISCRIMINATOR.len(),
+            );
+        }
 
         // wrapping_add: total SOL supply (~5.8e17) fits within u64::MAX.
         let new_lamports = destination.lamports().wrapping_add(view.lamports());

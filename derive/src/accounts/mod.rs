@@ -4,7 +4,9 @@
 
 mod attrs;
 mod client;
+mod field_kind;
 mod fields;
+mod init;
 
 use {
     crate::helpers::{
@@ -112,20 +114,30 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
     // --- Generate parse_steps (hybrid: per-field dup-aware or no-dup) ---
 
     let mut parse_steps: Vec<proc_macro2::TokenStream> = Vec::new();
-    let mut buf_offset = quote! { 0usize };
+    // Track buffer offset as a plain integer for non-composite structs (emits
+    // clean literals like `3usize` instead of `0usize + 1usize + 1usize + 1usize`,
+    // which avoids clippy::int_plus_one in generated code).
+    // For composite structs, fall back to expression trees since composite
+    // account counts aren't known at macro expansion time.
+    let mut buf_offset_num: usize = 0;
+    let mut buf_offset_expr: Option<proc_macro2::TokenStream> = if has_composites {
+        Some(quote! { 0usize })
+    } else {
+        None
+    };
 
     for (fi, ct) in composite_types.iter().enumerate() {
         if let Some(inner_ty) = ct {
             // Composite type - recursively call parse_accounts
             // (each inner type knows its own dup policy from its #[account(dup)] attribute)
-            let cur_offset = buf_offset.clone();
+            let cur_offset = buf_offset_expr.clone().unwrap();
 
             parse_steps.push(quote! {
                 {
                     let mut __inner_buf = core::mem::MaybeUninit::<
                         [quasar_lang::__internal::AccountView; <#inner_ty as AccountCount>::COUNT]
                     >::uninit();
-                    input = <#inner_ty>::parse_accounts(input, &mut __inner_buf)?;
+                    input = <#inner_ty>::parse_accounts(input, &mut __inner_buf, __program_id)?;
                     let __inner = unsafe { __inner_buf.assume_init() };
                     let mut __j = 0usize;
                     while __j < <#inner_ty as AccountCount>::COUNT {
@@ -135,13 +147,17 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                 }
             });
 
-            buf_offset = quote! { #buf_offset + <#inner_ty as AccountCount>::COUNT };
+            buf_offset_expr = Some(quote! { #cur_offset + <#inner_ty as AccountCount>::COUNT });
         } else {
-            let cur_offset = buf_offset.clone();
+            let cur_offset = if let Some(ref expr) = buf_offset_expr {
+                expr.clone()
+            } else {
+                quote! { #buf_offset_num }
+            };
             let attrs = &pf.field_attrs[fi];
             let field = &fields[fi];
 
-            if attrs.dup && buf_offset.to_string() == "0usize" {
+            if attrs.dup && buf_offset_num == 0 && buf_offset_expr.is_none() {
                 return syn::Error::new_spanned(
                     field,
                     "first account (index 0) cannot be marked with #[account(dup)] - it can never \
@@ -156,56 +172,40 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
             let is_optional = extract_generic_inner_type(&field.ty, "Option").is_some();
             let field_name = field.ident.as_ref().unwrap();
-            let account_index = buf_offset.to_string();
+            let account_index = if let Some(ref expr) = buf_offset_expr {
+                expr.to_string()
+            } else {
+                buf_offset_num.to_string()
+            };
 
             if is_optional || attrs.dup {
-                // Dup-aware path: checks borrow state to detect duplicates
-                let expected_signer = (expected_header >> 8) & 0x01;
-                let expected_writable = (expected_header >> 16) & 0x01;
-                let expected_exec = (expected_header >> 24) & 0x01;
+                // Dup-aware path: single masked u32 comparison replaces 2-3 separate flag
+                // checks. For optional accounts: sentinel guard wraps ALL
+                // checks (address == program_id means None, skip validation
+                // entirely).
+                let flag_mask: u32 = field_kind::FLAG_MASK;
+                let expected_masked = expected_header & flag_mask;
+                let flag_check = quote! {
+                    if quasar_lang::utils::hint::unlikely((actual_header & #flag_mask) != #expected_masked) {
+                        #[cfg(feature = "debug")]
+                        quasar_lang::__internal::log_str(concat!(
+                            "Account '", stringify!(#field_name),
+                            "' (index ", #account_index, "): header flags mismatch"
+                        ));
+                        return Err(ProgramError::from(quasar_lang::decode_header_error(actual_header, #expected_header)));
+                    }
+                };
 
-                let dup_check = |cond: proc_macro2::TokenStream, msg: &str| {
+                // For optional: sentinel guard wraps ALL checks.
+                // Use keys_eq for consistency — word-wise u64 comparison.
+                let guarded_checks = if is_optional {
                     quote! {
-                        if quasar_lang::utils::hint::unlikely(#cond) {
-                            #[cfg(feature = "debug")]
-                            quasar_lang::__internal::log_str(concat!(
-                                "Account '", stringify!(#field_name),
-                                "' (index ", #account_index, "): ", #msg
-                            ));
-                            return Err(ProgramError::from(quasar_lang::decode_header_error(actual_header, #expected_header)));
+                        if !quasar_lang::keys_eq(unsafe { &(*raw).address }, __program_id) {
+                            #flag_check
                         }
                     }
-                };
-
-                let flag_check = match (expected_signer, expected_writable) {
-                    (1, 1) => dup_check(
-                        quote! { (actual_header >> 8) as u16 != 0x0101 },
-                        "must be writable signer",
-                    ),
-                    (0, 1) => dup_check(
-                        quote! { ((actual_header >> 16) & 0x01) == 0 },
-                        "must be writable",
-                    ),
-                    (1, 0) => dup_check(
-                        quote! { ((actual_header >> 8) & 0x01) == 0 },
-                        "must be signer",
-                    ),
-                    _ => quote! {},
-                };
-
-                let exec_check = if is_optional {
-                    quote! {}
                 } else {
-                    match expected_exec {
-                        1 => dup_check(
-                            quote! { ((actual_header >> 24) & 0x01) != 1 },
-                            "must be executable program",
-                        ),
-                        _ => dup_check(
-                            quote! { ((actual_header >> 24) & 0x01) != 0 },
-                            "must not be executable",
-                        ),
-                    }
+                    flag_check
                 };
 
                 parse_steps.push(quote! {
@@ -214,16 +214,20 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                         let actual_header = unsafe { *(raw as *const u32) };
 
                         if (actual_header & 0xFF) == quasar_lang::__internal::NOT_BORROWED as u32 {
-                            #flag_check
-                            #exec_check
+                            #guarded_checks
                             unsafe {
                                 core::ptr::write(base.add(#cur_offset), quasar_lang::__internal::AccountView::new_unchecked(raw));
                                 input = input.add(__ACCOUNT_HEADER.wrapping_add((*raw).data_len as usize));
                                 input = input.add((input as usize).wrapping_neg() & 7);
                             }
                         } else {
+                            // Security: bounds-check the dup index before using it to read
+                            // from the AccountView buffer.
+                            let idx = (actual_header & 0xFF) as usize;
+                            if quasar_lang::utils::hint::unlikely(idx >= #cur_offset) {
+                                return Err(ProgramError::InvalidAccountData);
+                            }
                             unsafe {
-                                let idx = (actual_header & 0xFF) as usize;
                                 core::ptr::write(base.add(#cur_offset), core::ptr::read(base.add(idx)));
                                 input = input.add(core::mem::size_of::<u64>());
                             }
@@ -280,7 +284,10 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                 });
             }
 
-            buf_offset = quote! { #buf_offset + 1usize };
+            buf_offset_num += 1;
+            if let Some(ref expr) = buf_offset_expr {
+                buf_offset_expr = Some(quote! { #expr + 1usize });
+            }
         }
     }
 
@@ -302,7 +309,12 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                 let inner_ty = composite_types[fi].as_ref().unwrap();
                 let bumps_var = format_ident!("__composite_bumps_{}", field_name);
                 field_lets.push(quote! {
-                    let (__chunk, __rest) = __accounts_rest.split_at_mut(<#inner_ty as AccountCount>::COUNT);
+                    // SAFETY: dispatch! guarantees the total slice has COUNT
+                    // elements; each split_at_mut_unchecked carves off exactly
+                    // the inner type's COUNT.
+                    let (__chunk, __rest) = unsafe {
+                        __accounts_rest.split_at_mut_unchecked(<#inner_ty as AccountCount>::COUNT)
+                    };
                     __accounts_rest = __rest;
                     let (#field_name, #bumps_var) = <#inner_ty as ParseAccounts>::parse(
                         __chunk,
@@ -315,9 +327,10 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                     .push(quote! { #field_name: #bumps_var });
             } else {
                 field_lets.push(quote! {
-                    let (__chunk, __rest) = __accounts_rest.split_at_mut(1);
+                    // SAFETY: dispatch! guarantees sufficient elements remain.
+                    let (__chunk, __rest) = unsafe { __accounts_rest.split_at_mut_unchecked(1) };
                     __accounts_rest = __rest;
-                    let #field_name = &mut __chunk[0];
+                    let #field_name = unsafe { __chunk.get_unchecked_mut(0) };
                 });
             }
         }
@@ -358,35 +371,45 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
     // --- Parse body generation (3 code paths) ---
 
-    let has_any_checks = !pf.has_one_checks.is_empty()
-        || !pf.constraint_checks.is_empty()
-        || !pf.mut_checks.is_empty()
-        || !pf.pda_checks.is_empty()
-        || !pf.init_pda_checks.is_empty()
-        || !pf.init_blocks.is_empty();
+    let has_any_checks =
+        !pf.field_checks.is_empty() || !pf.init_pda_checks.is_empty() || !pf.init_blocks.is_empty();
 
     let seed_addr_captures = &pf.seed_addr_captures;
     let bump_init_vars = &pf.bump_init_vars;
-    let mut_checks = &pf.mut_checks;
-    let has_one_checks = &pf.has_one_checks;
-    let constraint_checks = &pf.constraint_checks;
-    let pda_checks = &pf.pda_checks;
+    let field_checks = &pf.field_checks;
     let field_constructs = &pf.field_constructs;
     let init_pda_checks = &pf.init_pda_checks;
     let init_blocks = &pf.init_blocks;
 
     let rent_fetch = if pf.needs_rent {
-        quote! { let __shared_rent = <quasar_lang::sysvars::rent::Rent as quasar_lang::sysvars::Sysvar>::get()?; }
+        if let Some(ref rent_field) = pf.rent_sysvar_field {
+            // Read Rent from the Sysvar<Rent> account — avoids sol_get_rent_sysvar syscall.
+            // SAFETY: At this point #rent_field is &mut AccountView. borrow_unchecked
+            // returns the account data; from_bytes_unchecked casts it to &Rent.
+            // The address is validated later in the normal check phase.
+            quote! {
+                let __shared_rent = unsafe {
+                    core::clone::Clone::clone(
+                        <quasar_lang::sysvars::rent::Rent as quasar_lang::sysvars::Sysvar>::from_bytes_unchecked(
+                            #rent_field.borrow_unchecked()
+                        )
+                    )
+                };
+            }
+        } else {
+            quote! { let __shared_rent = <quasar_lang::sysvars::rent::Rent as quasar_lang::sysvars::Sysvar>::get()?; }
+        }
     } else {
         quote! {}
     };
 
+    // SAFETY: `dispatch!` in the entrypoint verifies `__num_accounts >= COUNT`
+    // and creates an `[AccountView; COUNT]` buffer before calling `parse()`.
+    // The slice always has exactly `COUNT` elements, so length checks and
+    // pattern-match fallbacks are unreachable.
     let parse_body = if has_composites {
         if has_any_checks {
             quote! {
-                if accounts.len() < Self::COUNT {
-                    return Err(ProgramError::NotEnoughAccountKeys);
-                }
                 #(#field_lets)*
                 #(#seed_addr_captures)*
                 #(#bump_init_vars)*
@@ -400,19 +423,13 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
                 {
                     let Self { #(ref #field_names,)* } = result;
-                    #(#mut_checks)*
-                    #(#has_one_checks)*
-                    #(#constraint_checks)*
-                    #(#pda_checks)*
+                    #(#field_checks)*
                 }
 
                 Ok((result, #bumps_init))
             }
         } else {
             quote! {
-                if accounts.len() < Self::COUNT {
-                    return Err(ProgramError::NotEnoughAccountKeys);
-                }
                 #(#field_lets)*
 
                 Ok((Self {
@@ -422,8 +439,9 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
         }
     } else if has_any_checks {
         quote! {
+            // SAFETY: dispatch! guarantees accounts.len() == Self::COUNT.
             let [#(#field_names),*] = accounts else {
-                return Err(ProgramError::NotEnoughAccountKeys);
+                unsafe { core::hint::unreachable_unchecked() }
             };
 
             #(#seed_addr_captures)*
@@ -438,18 +456,16 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
             {
                 let Self { #(ref #field_names,)* } = result;
-                #(#mut_checks)*
-                #(#has_one_checks)*
-                #(#constraint_checks)*
-                #(#pda_checks)*
+                #(#field_checks)*
             }
 
             Ok((result, #bumps_init))
         }
     } else {
         quote! {
+            // SAFETY: dispatch! guarantees accounts.len() == Self::COUNT.
             let [#(#field_names),*] = accounts else {
-                return Err(ProgramError::NotEnoughAccountKeys);
+                unsafe { core::hint::unreachable_unchecked() }
             };
 
             Ok((Self {
@@ -564,6 +580,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
                 #[inline(always)]
                 fn parse(accounts: &'info mut [AccountView], program_id: &Address) -> Result<(Self, Self::Bumps), ProgramError> {
+                    debug_assert_eq!(accounts.len(), Self::COUNT, "parse() must be called with exactly COUNT elements");
                     Self::parse_with_instruction_data(accounts, &[], program_id)
                 }
 
@@ -573,6 +590,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                     __ix_data: &'info [u8],
                     __program_id: &Address,
                 ) -> Result<(Self, Self::Bumps), ProgramError> {
+                    debug_assert_eq!(accounts.len(), Self::COUNT, "parse() must be called with exactly COUNT elements");
                     #ix_arg_extraction
                     #parse_body
                 }
@@ -587,6 +605,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
                 #[inline(always)]
                 fn parse(accounts: &'info mut [AccountView], __program_id: &Address) -> Result<(Self, Self::Bumps), ProgramError> {
+                    debug_assert_eq!(accounts.len(), Self::COUNT, "parse() must be called with exactly COUNT elements");
                     #parse_body
                 }
 
@@ -611,6 +630,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
             pub unsafe fn parse_accounts(
                 mut input: *mut u8,
                 buf: &mut core::mem::MaybeUninit<[quasar_lang::__internal::AccountView; #count_expr]>,
+                __program_id: &quasar_lang::prelude::Address,
             ) -> Result<*mut u8, ProgramError> {
                 const __ACCOUNT_HEADER: usize =
                     core::mem::size_of::<quasar_lang::__internal::RuntimeAccount>()
@@ -820,7 +840,9 @@ fn generate_instruction_arg_extraction(ix_args: &[InstructionArg]) -> proc_macro
                         }
                     });
                     stmts.push(quote! {
-                        let __ix_dyn_byte_len = __ix_dyn_count * core::mem::size_of::<#elem>();
+                        let __ix_dyn_byte_len = __ix_dyn_count
+                            .checked_mul(core::mem::size_of::<#elem>())
+                            .ok_or(ProgramError::InvalidInstructionData)?;
                     });
                     stmts.push(quote! {
                         if __data.len() < __offset + __ix_dyn_byte_len {

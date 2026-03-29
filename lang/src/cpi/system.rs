@@ -1,12 +1,9 @@
 use {
     super::{CpiCall, InstructionAccount, Signer},
-    crate::{
-        sysvars::rent::Rent,
-        traits::{AsAccountView, Id},
-    },
+    crate::traits::{AsAccountView, Id},
     solana_account_view::AccountView,
     solana_address::{declare_id, Address},
-    solana_program_error::{ProgramError, ProgramResult},
+    solana_program_error::ProgramResult,
 };
 
 declare_id!("11111111111111111111111111111111");
@@ -208,38 +205,6 @@ impl crate::accounts::Program<System> {
         transfer(from.to_account_view(), to.to_account_view(), lamports)
     }
 
-    /// Create a new account with the minimum rent-exempt balance.
-    ///
-    /// If `rent` is `None`, fetches the Rent sysvar via syscall.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ProgramError::InvalidArgument` if `space` exceeds the
-    /// maximum permitted data length.
-    #[inline(always)]
-    pub fn create_account_with_minimum_balance<'a>(
-        &'a self,
-        from: &'a impl AsAccountView,
-        to: &'a impl AsAccountView,
-        space: u64,
-        owner: &'a Address,
-        rent: Option<&Rent>,
-    ) -> Result<CpiCall<'a, 2, 52>, ProgramError> {
-        let lamports = if let Some(r) = rent {
-            r.try_minimum_balance(space as usize)?
-        } else {
-            use crate::sysvars::Sysvar;
-            Rent::get()?.try_minimum_balance(space as usize)?
-        };
-        Ok(create_account(
-            from.to_account_view(),
-            to.to_account_view(),
-            lamports,
-            space,
-            owner,
-        ))
-    }
-
     /// Assign an account to a new owner. See [`assign`] for details.
     #[inline(always)]
     pub fn assign<'a>(
@@ -248,5 +213,20 @@ impl crate::accounts::Program<System> {
         owner: &'a Address,
     ) -> CpiCall<'a, 1, 36> {
         assign(account.to_account_view(), owner)
+    }
+
+    /// Initialize an account, handling both fresh and pre-funded cases.
+    /// See [`init_account`] for details.
+    #[inline(always)]
+    pub fn init_account(
+        &self,
+        payer: &impl AsAccountView,
+        account: &mut AccountView,
+        lamports: u64,
+        space: u64,
+        owner: &Address,
+        signers: &[Signer],
+    ) -> ProgramResult {
+        init_account(payer.to_account_view(), account, lamports, space, owner, signers)
     }
 }

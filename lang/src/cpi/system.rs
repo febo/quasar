@@ -1,12 +1,12 @@
 use {
-    super::{CpiCall, InstructionAccount},
+    super::{CpiCall, InstructionAccount, Signer},
     crate::{
         sysvars::rent::Rent,
         traits::{AsAccountView, Id},
     },
     solana_account_view::AccountView,
     solana_address::{declare_id, Address},
-    solana_program_error::ProgramError,
+    solana_program_error::{ProgramError, ProgramResult},
 };
 
 declare_id!("11111111111111111111111111111111");
@@ -120,6 +120,46 @@ pub fn assign<'a>(account: &'a AccountView, owner: &'a Address) -> CpiCall<'a, 1
         [account],
         data,
     )
+}
+
+/// Initialize an account, handling both fresh and pre-funded cases.
+///
+/// If the account has zero lamports (fresh), issues a single `CreateAccount`
+/// system CPI. If the account is pre-funded (e.g. someone sent SOL to the
+/// PDA address before initialization), uses `Transfer` (top up rent delta
+/// if needed) + `Assign` (change owner) + resize (allocate data space).
+///
+/// This avoids the `CreateAccount` failure mode where the target account
+/// already has a non-zero lamport balance.
+///
+/// ### Parameters
+///
+/// - `payer`: funding account (must be a signer)
+/// - `account`: account to initialize (writable; PDA signer seeds in `signers`)
+/// - `lamports`: minimum rent-exempt balance
+/// - `space`: account data size in bytes
+/// - `owner`: program to own the new account
+/// - `signers`: PDA signer seeds (empty slice for keypair-signed accounts)
+#[inline(always)]
+pub fn init_account(
+    payer: &AccountView,
+    account: &mut AccountView,
+    lamports: u64,
+    space: u64,
+    owner: &Address,
+    signers: &[Signer],
+) -> ProgramResult {
+    if account.lamports() == 0 {
+        create_account(payer, account, lamports, space, owner)
+            .invoke_with_signers(signers)
+    } else {
+        let required = lamports.saturating_sub(account.lamports());
+        if required > 0 {
+            transfer(payer, account, required).invoke()?;
+        }
+        assign(account, owner).invoke_with_signers(signers)?;
+        crate::accounts::account::resize(account, space as usize)
+    }
 }
 
 // --- System program account type ---

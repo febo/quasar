@@ -1425,21 +1425,24 @@ pub(super) fn process_fields(
             let has_pda = attrs.seeds.is_some();
             let pay_field = payer_field.unwrap();
 
-            // Build the PDA signing code (if applicable)
-            let invoke_expr = if has_pda {
+            // Build PDA signer seeds (if applicable) for init_account.
+            let (signers_setup, signers_ref) = if has_pda {
                 let bump_var = format_ident!("__bumps_{}", field_name);
                 let seed_exprs = attrs.seeds.as_ref().unwrap();
                 let seed_slices: Vec<proc_macro2::TokenStream> = seed_exprs
                     .iter()
                     .map(|expr| seed_slice_expr_for_parse(expr, field_name_strings))
                     .collect();
-                quote! {
-                    let __init_bump_ref: &[u8] = &[#bump_var];
-                    let __init_signer_seeds = [#(quasar_lang::cpi::Seed::from(#seed_slices),)* quasar_lang::cpi::Seed::from(__init_bump_ref)];
-                    __init_cpi.invoke_signed(&__init_signer_seeds)?;
-                }
+                (
+                    quote! {
+                        let __init_bump_ref: &[u8] = &[#bump_var];
+                        let __init_signer_seeds = [#(quasar_lang::cpi::Seed::from(#seed_slices),)* quasar_lang::cpi::Seed::from(__init_bump_ref)];
+                        let __init_signers = [quasar_lang::cpi::Signer::from(&__init_signer_seeds[..])];
+                    },
+                    quote! { &__init_signers },
+                )
             } else {
-                quote! { __init_cpi.invoke()?; }
+                (quote! {}, quote! { &[] })
             };
 
             if is_ata_init {
@@ -1500,12 +1503,12 @@ pub(super) fn process_fields(
                     let __init_lamports = __shared_rent.try_minimum_balance(
                         quasar_spl::TokenAccountState::LEN
                     )?;
-                    let __init_cpi = quasar_lang::cpi::system::create_account(
+                    #signers_setup
+                    quasar_lang::cpi::system::init_account(
                         #pay_field, #field_name, __init_lamports,
                         quasar_spl::TokenAccountState::LEN as u64,
-                        #tok_field.address(),
-                    );
-                    #invoke_expr
+                        #tok_field.address(), #signers_ref,
+                    )?;
                     quasar_spl::initialize_account3(
                         #tok_field, #field_name, #mint_field, #auth_field.address(),
                     ).invoke()?;
@@ -1548,12 +1551,12 @@ pub(super) fn process_fields(
                     let __init_lamports = __shared_rent.try_minimum_balance(
                         quasar_spl::MintAccountState::LEN
                     )?;
-                    let __init_cpi = quasar_lang::cpi::system::create_account(
+                    #signers_setup
+                    quasar_lang::cpi::system::init_account(
                         #pay_field, #field_name, __init_lamports,
                         quasar_spl::MintAccountState::LEN as u64,
-                        #tok_field.address(),
-                    );
-                    #invoke_expr
+                        #tok_field.address(), #signers_ref,
+                    )?;
                     quasar_spl::initialize_mint2(
                         #tok_field, #field_name,
                         (#decimals_expr) as u8,
@@ -1605,10 +1608,11 @@ pub(super) fn process_fields(
                 let cpi_body = quote! {
                     let __init_space = #space_expr;
                     let __init_lamports = __shared_rent.try_minimum_balance(__init_space as usize)?;
-                    let __init_cpi = quasar_lang::cpi::system::create_account(
+                    #signers_setup
+                    quasar_lang::cpi::system::init_account(
                         #pay_field, #field_name, __init_lamports, __init_space, &crate::ID,
-                    );
-                    #invoke_expr
+                        #signers_ref,
+                    )?;
                     let __disc = <#inner_type as quasar_lang::traits::Discriminator>::DISCRIMINATOR;
                     unsafe {
                         core::ptr::copy_nonoverlapping(

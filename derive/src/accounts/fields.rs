@@ -1128,7 +1128,7 @@ pub(super) fn process_fields(
                             let __pda_seeds = [#(#seed_idents,)* __bump_ref];
                             if let Err(__e) = quasar_lang::pda::verify_program_address(&__pda_seeds, __program_id, &#addr_access) {
                                 #[cfg(feature = "debug")]
-                                quasar_lang::__internal::log_str(concat!(
+                                quasar_lang::prelude::log(concat!(
                                     "Account '", stringify!(#field_name),
                                     "': PDA verification failed"
                                 ));
@@ -1173,7 +1173,7 @@ pub(super) fn process_fields(
                                 let __pda_seeds = [#(#seed_idents,)* __bump_ref];
                                 if let Err(__e) = quasar_lang::pda::verify_program_address(&__pda_seeds, __program_id, &#addr_access) {
                                     #[cfg(feature = "debug")]
-                                    quasar_lang::__internal::log_str(concat!(
+                                    quasar_lang::prelude::log(concat!(
                                         "Account '", stringify!(#field_name),
                                         "': PDA verification failed"
                                     ));
@@ -1206,7 +1206,7 @@ pub(super) fn process_fields(
                                         let __pda_seeds = [#(#seed_idents,)* __bump_ref];
                                         if let Err(__e) = quasar_lang::pda::verify_program_address(&__pda_seeds, __program_id, &#addr_access) {
                                             #[cfg(feature = "debug")]
-                                            quasar_lang::__internal::log_str(concat!(
+                                            quasar_lang::prelude::log(concat!(
                                                 "Account '", stringify!(#field_name),
                                                 "': PDA verification failed"
                                             ));
@@ -1218,7 +1218,7 @@ pub(super) fn process_fields(
                                         let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
                                         if #addr_access != __expected {
                                             #[cfg(feature = "debug")]
-                                            quasar_lang::__internal::log_str(concat!(
+                                            quasar_lang::prelude::log(concat!(
                                                 "Account '", stringify!(#field_name),
                                                 "': PDA verification failed"
                                             ));
@@ -1237,7 +1237,7 @@ pub(super) fn process_fields(
                                     let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
                                     if #addr_access != __expected {
                                         #[cfg(feature = "debug")]
-                                        quasar_lang::__internal::log_str(concat!(
+                                        quasar_lang::prelude::log(concat!(
                                             "Account '", stringify!(#field_name),
                                             "': PDA verification failed"
                                         ));
@@ -1256,7 +1256,7 @@ pub(super) fn process_fields(
                                 let (__expected, __bump) = quasar_lang::pda::based_try_find_program_address(&__pda_seeds, __program_id)?;
                                 if #addr_access != __expected {
                                     #[cfg(feature = "debug")]
-                                    quasar_lang::__internal::log_str(concat!(
+                                    quasar_lang::prelude::log(concat!(
                                         "Account '", stringify!(#field_name),
                                         "': PDA verification failed"
                                     ));

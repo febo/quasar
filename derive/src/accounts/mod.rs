@@ -188,7 +188,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                 let flag_check = quote! {
                     if quasar_lang::utils::hint::unlikely((actual_header & #flag_mask) != #expected_masked) {
                         #[cfg(feature = "debug")]
-                        quasar_lang::__internal::log_str(concat!(
+                        quasar_lang::prelude::log(concat!(
                             "Account '", stringify!(#field_name),
                             "' (index ", #account_index, "): header flags mismatch"
                         ));
@@ -270,7 +270,7 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
 
                         if quasar_lang::utils::hint::unlikely(#check_cond) {
                             #[cfg(feature = "debug")]
-                            quasar_lang::__internal::log_str(concat!(
+                            quasar_lang::prelude::log(concat!(
                                 "Account '", stringify!(#field_name),
                                 "' (index ", #account_index, "): ", #debug_msg
                             ));

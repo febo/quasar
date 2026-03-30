@@ -1,6 +1,6 @@
 //! Quasar — zero-copy Solana program framework.
 //!
-//! `quasar-core` provides the runtime primitives for building Solana programs
+//! `quasar-lang` provides the runtime primitives for building Solana programs
 //! with Anchor-compatible ergonomics and minimal compute unit overhead. Account
 //! data is accessed through pointer casts to `#[repr(C)]` companion structs —
 //! no deserialization, no heap allocation.
@@ -9,7 +9,7 @@
 //!
 //! | Module | Purpose |
 //! |--------|---------|
-//! | [`accounts`] | Zero-copy account wrapper types (`Account`, `Initialize`, `Signer`) |
+//! | [`accounts`] | Zero-copy account wrapper types (`Account`, `Signer`, `UncheckedAccount`) |
 //! | [`checks`] | Compile-time account validation traits |
 //! | [`cpi`] | Const-generic cross-program invocation builder |
 //! | [`pod`] | Alignment-1 integer types (re-exported from `quasar-pod`) |
@@ -73,14 +73,7 @@ pub mod __internal {
     /// Not borrowed + executable.
     pub const NODUP_EXECUTABLE: u32 = 0xFF | (1 << 24);
 
-    /// Allocation-free logging helper for generated code.
-    /// Wraps solana_program_log::log for use in derive macro output.
-    // Used by derive-generated code under #[cfg(feature = "debug")]
-    #[inline(always)]
-    #[allow(dead_code)]
-    pub fn log_str(msg: &str) {
-        solana_program_log::log(msg);
-    }
+
 }
 
 /// Header validation constants for manual `ParseAccounts` implementations.

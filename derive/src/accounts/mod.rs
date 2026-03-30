@@ -538,8 +538,8 @@ pub(crate) fn derive_accounts(input: TokenStream) -> TokenStream {
                     let auth = &cpi.authority;
                     quote! {
                         {
-                            use quasar_spl::TokenClose as _;
-                            self.#field.close(self.#tp, self.#dest, self.#auth).invoke()?;
+                            use quasar_spl::TokenCpi as _;
+                            self.#tp.close_account(self.#field, self.#dest, self.#auth).invoke()?;
                         }
                     }
                 } else {

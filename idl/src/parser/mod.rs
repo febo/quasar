@@ -137,7 +137,7 @@ pub fn build_idl(parsed: ParsedProgram) -> Idl {
             let accounts_items = accounts_structs
                 .iter()
                 .find(|s| s.name == ix.accounts_type_name)
-                .map(accounts::to_idl_accounts)
+                .map(|s| accounts::to_idl_accounts(s, &state_accounts))
                 .unwrap_or_default();
 
             let args: Vec<IdlField> = ix

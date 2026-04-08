@@ -280,9 +280,15 @@ fn extract_eq_ident(s: &str) -> Option<String> {
     }
 }
 
-/// Extract account references from a `seeds = [...]` directive.
-/// Looks for patterns like `ident.key()` or `ident.address()`.
+/// Extract account references from a `seeds = [...]` or `seeds = Type::seeds(...)`
+/// directive. Looks for patterns like `ident.key()`, `ident.address()`, or bare
+/// identifiers.
 fn extract_seed_account_refs(seeds_directive: &str) -> Vec<String> {
+    // Check for Type::seeds(...) syntax first
+    if let Some(refs) = extract_typed_seed_refs(seeds_directive) {
+        return refs;
+    }
+
     // Find the bracket contents: seeds = [...]
     let bracket_start = match seeds_directive.find('[') {
         Some(idx) => idx,
@@ -355,6 +361,64 @@ fn extract_seed_account_refs(seeds_directive: &str) -> Vec<String> {
     }
 
     refs
+}
+
+/// Extract account references from a `seeds = Type::seeds(arg1, arg2)` directive.
+/// Returns None if the directive is not in typed-seeds format.
+fn extract_typed_seed_refs(seeds_directive: &str) -> Option<Vec<String>> {
+    // Look for `:: seeds (` pattern (syn may insert spaces around `::`)
+    let eq_pos = seeds_directive.find('=')?;
+    let after_eq = seeds_directive[eq_pos + 1..].trim();
+
+    // Must contain `::` before any bracket
+    let colons_idx = after_eq.find("::")?;
+    let after_colons = after_eq[colons_idx + 2..].trim();
+
+    if !after_colons.starts_with("seeds") {
+        return None;
+    }
+
+    let after_kw = after_colons["seeds".len()..].trim();
+    if !after_kw.starts_with('(') {
+        return None;
+    }
+
+    // Find matching close paren
+    let mut depth = 0;
+    let mut paren_end = None;
+    for (i, c) in after_kw.chars().enumerate() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    paren_end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let paren_end = paren_end?;
+    let inner = &after_kw[1..paren_end];
+
+    let mut refs = Vec::new();
+    for part in inner.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Bare identifier → account ref
+        if trimmed
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_')
+        {
+            refs.push(trimmed.to_string());
+        }
+    }
+
+    Some(refs)
 }
 
 #[cfg(test)]

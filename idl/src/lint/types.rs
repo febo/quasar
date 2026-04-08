@@ -85,7 +85,9 @@ pub struct InstructionScore {
 
 impl LintReport {
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(|d| d.severity == Severity::Error)
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
     }
 }
 
@@ -127,14 +129,19 @@ impl TypeRegistry {
             .map(|(name, _)| name.clone())
             .collect();
         if !addr_fields.is_empty() {
-            self.address_fields.insert(type_name.to_string(), addr_fields);
+            self.address_fields
+                .insert(type_name.to_string(), addr_fields);
         }
     }
 
     pub fn get_address_fields(&self, type_name: &str) -> Vec<String> {
         match type_name {
             "TokenAccount" | "Token" => vec!["mint".to_string(), "owner".to_string()],
-            _ => self.address_fields.get(type_name).cloned().unwrap_or_default(),
+            _ => self
+                .address_fields
+                .get(type_name)
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 }

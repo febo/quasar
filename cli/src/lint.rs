@@ -1,9 +1,5 @@
 use {
-    crate::{
-        config::QuasarConfig,
-        error::CliResult,
-        utils, LintCommand,
-    },
+    crate::{config::QuasarConfig, error::CliResult, utils, LintCommand},
     quasar_idl::lint,
     std::path::Path,
 };
@@ -26,7 +22,8 @@ pub fn run_lint_from_path(crate_path: &Path, lint_config: &lint::LintConfig) -> 
     run_lint_on_parsed(&parsed, lint_config)
 }
 
-/// Run lint on an already-parsed program (called from build to avoid double-parse).
+/// Run lint on an already-parsed program (called from build to avoid
+/// double-parse).
 pub fn run_lint_on_parsed(
     parsed: &quasar_idl::parser::ParsedProgram,
     lint_config: &lint::LintConfig,

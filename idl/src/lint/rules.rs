@@ -1,10 +1,13 @@
 //! Lint rules L001-L007.
 
-use std::collections::{HashSet, VecDeque};
-
-use super::constraints::FieldClass;
-use super::graph::{AccountGraph, EdgeKind};
-use super::types::{Diagnostic, LintRule, Severity};
+use {
+    super::{
+        constraints::FieldClass,
+        graph::{AccountGraph, EdgeKind},
+        types::{Diagnostic, LintRule, Severity},
+    },
+    std::collections::{HashSet, VecDeque},
+};
 
 /// Run all lint rules against the given account graph.
 pub fn run_all(graph: &AccountGraph, diagnostics: &mut Vec<Diagnostic>) {
@@ -138,9 +141,7 @@ fn l002_disconnected_subgraph(graph: &AccountGraph, diagnostics: &mut Vec<Diagno
             components.len(),
             component_labels.join(", ")
         ),
-        suggestion: Some(
-            "add constraints to connect all account clusters".to_string(),
-        ),
+        suggestion: Some("add constraints to connect all account clusters".to_string()),
     });
 }
 
@@ -299,10 +300,7 @@ fn l006_writable_without_authority(graph: &AccountGraph, diagnostics: &mut Vec<D
             severity: LintRule::L006.default_severity(),
             accounts_struct: graph.struct_name.clone(),
             field: Some(node.name.clone()),
-            message: format!(
-                "writable account `{}` has no path to a signer",
-                node.name
-            ),
+            message: format!("writable account `{}` has no path to a signer", node.name),
             suggestion: Some(
                 "add an authority constraint or connect through has_one to a signer".to_string(),
             ),
@@ -344,9 +342,7 @@ fn l007_unchecked_account(graph: &AccountGraph, diagnostics: &mut Vec<Diagnostic
                 "unchecked account `{}` has no validation constraints",
                 node.name
             ),
-            suggestion: Some(
-                "add an `address`, `constraint`, or `seeds` directive".to_string(),
-            ),
+            suggestion: Some("add an `address`, `constraint`, or `seeds` directive".to_string()),
         });
     }
 }

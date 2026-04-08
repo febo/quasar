@@ -5,11 +5,14 @@
 //! (`has_one`, `token::mint`, PDA seeds, etc.) and missing edges are
 //! inferred from the type registry so downstream rules can flag them.
 
-use std::collections::{HashSet, VecDeque};
-
-use super::types::TypeRegistry;
-use crate::lint::constraints::{FieldClass, FieldConstraints};
-use crate::parser::accounts::RawAccountsStruct;
+use {
+    super::types::TypeRegistry,
+    crate::{
+        lint::constraints::{FieldClass, FieldConstraints},
+        parser::accounts::RawAccountsStruct,
+    },
+    std::collections::{HashSet, VecDeque},
+};
 
 // ---------------------------------------------------------------------------
 // Edge types
@@ -344,9 +347,7 @@ fn detect_missing_edges(
                 if node.constraints.token_mint.is_none()
                     && node.constraints.associated_token_mint.is_none()
                 {
-                    if let Some(mint_name) =
-                        has_class(|c| matches!(c, FieldClass::Mint))
-                    {
+                    if let Some(mint_name) = has_class(|c| matches!(c, FieldClass::Mint)) {
                         if !is_covered(edges, &node.name, &mint_name) {
                             missing.push(MissingEdge {
                                 from: node.name.clone(),
@@ -362,9 +363,7 @@ fn detect_missing_edges(
                     && node.constraints.token_authority.is_none()
                     && node.constraints.associated_token_authority.is_none()
                 {
-                    if let Some(signer_name) =
-                        has_class(|c| matches!(c, FieldClass::Signer))
-                    {
+                    if let Some(signer_name) = has_class(|c| matches!(c, FieldClass::Signer)) {
                         if !is_covered(edges, &node.name, &signer_name) {
                             missing.push(MissingEdge {
                                 from: node.name.clone(),

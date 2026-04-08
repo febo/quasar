@@ -113,7 +113,7 @@ impl QuasarConfig {
     }
 
     pub fn lint_enabled(&self) -> bool {
-        self.lint.as_ref().map_or(false, |l| l.enabled)
+        self.lint.as_ref().is_some_and(|l| l.enabled)
     }
 
     pub fn client_languages(&self) -> Vec<&str> {

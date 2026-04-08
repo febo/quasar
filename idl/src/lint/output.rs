@@ -34,14 +34,14 @@ fn print_score_dashboard(report: &LintReport) {
         total_constrained += score.constrained_edges;
         total_edges += score.total_edges;
 
-        let (icon, color) = if score.total_edges == 0 || score.constrained_edges == score.total_edges
-        {
-            ("\u{2714}", GREEN) // checkmark
-        } else if score.constrained_edges * 2 > score.total_edges {
-            ("\u{26A0}", YELLOW) // warning sign
-        } else {
-            ("\u{2718}", RED) // cross
-        };
+        let (icon, color) =
+            if score.total_edges == 0 || score.constrained_edges == score.total_edges {
+                ("\u{2714}", GREEN) // checkmark
+            } else if score.constrained_edges * 2 > score.total_edges {
+                ("\u{26A0}", YELLOW) // warning sign
+            } else {
+                ("\u{2718}", RED) // cross
+            };
 
         let missing = score.total_edges - score.constrained_edges;
         let suffix = if missing > 0 {
@@ -88,17 +88,20 @@ fn print_diagnostics(report: &LintReport) {
 
         println!(
             "  {}{}{} {} in {}{}: {}",
-            color, icon, RESET, diag.rule.code(), diag.accounts_struct, field_part, diag.message
+            color,
+            icon,
+            RESET,
+            diag.rule.code(),
+            diag.accounts_struct,
+            field_part,
+            diag.message
         );
 
         if let Some(suggestion) = &diag.suggestion {
             println!("    \u{2192} {}", suggestion);
         }
 
-        println!(
-            "    Suppress: #[allow({})]\n",
-            diag.rule.suppression_attr()
-        );
+        println!("    Suppress: #[allow({})]\n", diag.rule.suppression_attr());
     }
 }
 

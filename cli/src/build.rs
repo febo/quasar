@@ -39,10 +39,7 @@ fn run_once(debug: bool, features: Option<&str>, lint_flag: bool) -> CliResult {
     let parsed = crate::idl::generate(&crate_root, &languages)?;
 
     if lint_flag || config.lint_enabled() {
-        crate::lint::run_lint_on_parsed(
-            &parsed,
-            &quasar_idl::lint::LintConfig::default(),
-        )?;
+        crate::lint::run_lint_on_parsed(&parsed, &quasar_idl::lint::LintConfig::default())?;
     }
 
     let sp = style::spinner("Building...");

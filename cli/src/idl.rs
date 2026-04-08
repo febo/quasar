@@ -3,7 +3,11 @@ use {
         error::{CliError, CliResult},
         IdlCommand,
     },
-    quasar_idl::{codegen, parser, parser::ParsedProgram, types::Idl},
+    quasar_idl::{
+        codegen,
+        parser::{self, ParsedProgram},
+        types::Idl,
+    },
     std::path::{Path, PathBuf},
 };
 

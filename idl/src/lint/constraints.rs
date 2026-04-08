@@ -64,7 +64,12 @@ pub fn classify_field_type(ty: &syn::Type) -> (FieldClass, Option<String>) {
     match ident.as_str() {
         "Account" => {
             let inner = inner_name.clone().unwrap_or_else(|| "Unknown".to_string());
-            (FieldClass::Account { inner_type: inner.clone() }, Some(inner))
+            (
+                FieldClass::Account {
+                    inner_type: inner.clone(),
+                },
+                Some(inner),
+            )
         }
         "InterfaceAccount" => {
             // Distinguish TokenAccount vs Mint by inner type name
@@ -329,9 +334,7 @@ fn extract_seed_account_refs(seeds_directive: &str) -> Vec<String> {
             let before_dot = &normalized[..dot_pos];
             let after_dot = &normalized[dot_pos + 1..];
             if (after_dot.starts_with("key()") || after_dot.starts_with("address()"))
-                && before_dot
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '_')
+                && before_dot.chars().all(|c| c.is_alphanumeric() || c == '_')
                 && !before_dot.is_empty()
             {
                 refs.push(before_dot.to_string());
@@ -366,9 +369,7 @@ mod tests {
 
     #[test]
     fn split_directives_with_seeds() {
-        let result = split_directives(
-            r#"seeds = [b"escrow", maker.key()], bump, has_one = maker"#,
-        );
+        let result = split_directives(r#"seeds = [b"escrow", maker.key()], bump, has_one = maker"#);
         assert_eq!(result.len(), 3);
         assert!(result[0].starts_with("seeds"));
         assert_eq!(result[1], "bump");
@@ -377,7 +378,10 @@ mod tests {
 
     #[test]
     fn extract_eq_ident_basic() {
-        assert_eq!(extract_eq_ident("has_one = wallet"), Some("wallet".to_string()));
+        assert_eq!(
+            extract_eq_ident("has_one = wallet"),
+            Some("wallet".to_string())
+        );
     }
 
     #[test]
@@ -390,26 +394,22 @@ mod tests {
 
     #[test]
     fn extract_seed_refs() {
-        let refs = extract_seed_account_refs(
-            r#"seeds = [b"escrow", maker.key(), borrower.address()]"#,
-        );
+        let refs =
+            extract_seed_account_refs(r#"seeds = [b"escrow", maker.key(), borrower.address()]"#);
         assert_eq!(refs, vec!["maker", "borrower"]);
     }
 
     #[test]
     fn extract_seed_refs_bare_ident() {
-        let refs = extract_seed_account_refs(
-            r#"seeds = [b"vault", user]"#,
-        );
+        let refs = extract_seed_account_refs(r#"seeds = [b"vault", user]"#);
         assert_eq!(refs, vec!["user"]);
     }
 
     #[test]
     fn extract_seed_refs_does_not_exclude_borrower() {
-        // Regression: must check `b"` prefix, not just `b`, so `borrower` isn't excluded
-        let refs = extract_seed_account_refs(
-            r#"seeds = [b"vault", borrower.key()]"#,
-        );
+        // Regression: must check `b"` prefix, not just `b`, so `borrower` isn't
+        // excluded
+        let refs = extract_seed_account_refs(r#"seeds = [b"vault", borrower.key()]"#);
         assert_eq!(refs, vec!["borrower"]);
     }
 
@@ -449,7 +449,8 @@ mod tests {
                 let field = &fields.named[0];
                 let c = parse_field_constraints(&field.attrs);
                 assert!(
-                    c.suppressions.contains(&"quasar::unconstrained".to_string()),
+                    c.suppressions
+                        .contains(&"quasar::unconstrained".to_string()),
                     "expected quasar::unconstrained suppression, got: {:?}",
                     c.suppressions
                 );

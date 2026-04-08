@@ -3,11 +3,10 @@
 //! Supports four output formats: ASCII (tree), Mermaid, DOT (Graphviz), and
 //! JSON.  The ASCII renderer is the primary format shown in terminal output.
 
-use std::collections::{HashMap, HashSet};
-
-use super::constraints::FieldClass;
-use super::graph::AccountGraph;
-use super::types::GraphFormat;
+use {
+    super::{constraints::FieldClass, graph::AccountGraph, types::GraphFormat},
+    std::collections::{HashMap, HashSet},
+};
 
 /// Render the account graph in the requested format.
 pub fn render(graph: &AccountGraph, format: &GraphFormat) -> String {
@@ -64,16 +63,18 @@ fn render_ascii(graph: &AccountGraph) -> String {
         outbound.entry(node.name.as_str()).or_default();
     }
     for edge in &graph.edges {
-        outbound
-            .entry(edge.from.as_str())
-            .or_default()
-            .push((edge.to.as_str(), edge.kind.label().to_string(), false));
+        outbound.entry(edge.from.as_str()).or_default().push((
+            edge.to.as_str(),
+            edge.kind.label().to_string(),
+            false,
+        ));
     }
     for me in &graph.missing_edges {
-        outbound
-            .entry(me.from.as_str())
-            .or_default()
-            .push((me.to.as_str(), me.expected_kind.label().to_string(), true));
+        outbound.entry(me.from.as_str()).or_default().push((
+            me.to.as_str(),
+            me.expected_kind.label().to_string(),
+            true,
+        ));
     }
 
     // Find inbound node set (nodes that are targets of edges)
@@ -191,9 +192,7 @@ fn render_ascii_subtree<'a>(
             ));
         } else {
             let child_pad = " ".repeat(indent + 2);
-            out.push_str(&format!(
-                "{child_pad}{connector}──{label}──→ {target}\n"
-            ));
+            out.push_str(&format!("{child_pad}{connector}──{label}──→ {target}\n"));
 
             // Queue target for subtree rendering if not yet visited
             if !visited.contains(target) {
@@ -224,10 +223,7 @@ fn render_mermaid(graph: &AccountGraph) -> String {
             FieldClass::Sysvar => "\u{1f4cb} ",
             _ => "",
         };
-        out.push_str(&format!(
-            "    {name}[\"{icon}{name}\"]\n",
-            name = node.name
-        ));
+        out.push_str(&format!("    {name}[\"{icon}{name}\"]\n", name = node.name));
     }
 
     // Edges
@@ -268,10 +264,7 @@ fn render_dot(graph: &AccountGraph) -> String {
             FieldClass::Program | FieldClass::Sysvar => "ellipse",
             _ => "box",
         };
-        out.push_str(&format!(
-            "    {} [shape={}];\n",
-            node.name, shape
-        ));
+        out.push_str(&format!("    {} [shape={}];\n", node.name, shape));
     }
 
     // Edges
@@ -345,9 +338,13 @@ fn render_json(graph: &AccountGraph) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::lint::constraints::FieldConstraints;
-    use crate::lint::graph::{AccountGraph, Edge, EdgeKind, MissingEdge, Node};
+    use {
+        super::*,
+        crate::lint::{
+            constraints::FieldConstraints,
+            graph::{AccountGraph, Edge, EdgeKind, MissingEdge, Node},
+        },
+    };
 
     fn sample_graph() -> AccountGraph {
         AccountGraph {
@@ -421,10 +418,7 @@ mod tests {
     fn ascii_contains_signer_label() {
         let g = sample_graph();
         let out = render(&g, &GraphFormat::Ascii);
-        assert!(
-            out.contains("[signer]"),
-            "should label signer nodes: {out}"
-        );
+        assert!(out.contains("[signer]"), "should label signer nodes: {out}");
     }
 
     #[test]

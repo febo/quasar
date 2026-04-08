@@ -87,10 +87,7 @@ pub fn apply_fixes(source: &str, fixes: &[Fix]) -> String {
 /// Find byte offset of `pub {name} :` or `pub {name}:` in source.
 fn find_field(source: &str, name: &str) -> Option<usize> {
     // Try both patterns: with and without space before colon.
-    let patterns = [
-        format!("pub {} :", name),
-        format!("pub {}:", name),
-    ];
+    let patterns = [format!("pub {} :", name), format!("pub {}:", name)];
     for pat in &patterns {
         if let Some(pos) = source.find(pat) {
             return Some(pos);

@@ -1,7 +1,7 @@
-use quasar_idl::lint::{self, LintRule, Severity};
-use quasar_idl::lint::fix;
-use quasar_idl::lint::graph::AccountGraph;
-use quasar_idl::parser;
+use quasar_idl::{
+    lint::{self, fix, graph::AccountGraph, LintRule, Severity},
+    parser,
+};
 
 fn lint_source(src: &str) -> lint::LintReport {
     let parsed = quasar_idl::parser::parse_program_from_source(src);
@@ -99,7 +99,10 @@ fn parses_has_one_constraints() {
         .find(|f| f.name == "proposal")
         .unwrap();
 
-    assert_eq!(proposal_field.constraints.has_ones, vec!["wallet", "intent"]);
+    assert_eq!(
+        proposal_field.constraints.has_ones,
+        vec!["wallet", "intent"]
+    );
     assert!(proposal_field.constraints.is_mut);
 }
 
@@ -359,10 +362,7 @@ fn l002_disconnected_subgraph() {
         pub struct Ledger { pub other_owner: Address }
     "#,
     );
-    let has_l002 = report
-        .diagnostics
-        .iter()
-        .any(|d| d.rule == LintRule::L002);
+    let has_l002 = report.diagnostics.iter().any(|d| d.rule == LintRule::L002);
     assert!(
         has_l002,
         "expected L002 for disconnected subgraphs, got: {:?}",
@@ -478,7 +478,8 @@ fn l006_writable_without_authority() {
 
 #[test]
 fn cross_instruction_detects_unverified_field() {
-    let report = lint_source(r#"
+    let report = lint_source(
+        r#"
         declare_id!("11111111111111111111111111111111");
         #[program]
         mod p {
@@ -505,7 +506,8 @@ fn cross_instruction_detects_unverified_field() {
         pub struct Proposal { pub wallet: Address }
         #[account(discriminator = 2)]
         pub struct Wallet { pub bump: u8 }
-    "#);
+    "#,
+    );
     assert!(report.diagnostics.iter().any(|d| {
         d.rule == LintRule::L009
             && d.message.contains("Cross-instruction")
@@ -520,7 +522,8 @@ fn cross_instruction_detects_unverified_field() {
 
 #[test]
 fn bare_ident_seeds_suppress_has_one() {
-    let report = lint_source(r#"
+    let report = lint_source(
+        r#"
         declare_id!("11111111111111111111111111111111");
         #[program]
         mod p {
@@ -534,7 +537,8 @@ fn bare_ident_seeds_suppress_has_one() {
             #[account(seeds = [b"vault", user], bump)]
             pub vault: UncheckedAccount<'info>,
         }
-    "#);
+    "#,
+    );
     // vault is PDA-seeded with user — should NOT trigger L001 or L007
     assert!(!has_diagnostic(&report, LintRule::L001, "vault"));
     assert!(!has_diagnostic(&report, LintRule::L007, "vault"));
@@ -542,7 +546,8 @@ fn bare_ident_seeds_suppress_has_one() {
 
 #[test]
 fn l007_no_false_positive_for_has_one_target() {
-    let report = lint_source(r#"
+    let report = lint_source(
+        r#"
         declare_id!("11111111111111111111111111111111");
         #[program]
         mod p {
@@ -559,14 +564,16 @@ fn l007_no_false_positive_for_has_one_target() {
         }
         #[account(discriminator = 1)]
         pub struct Escrow { pub authority: Address, pub maker: Address }
-    "#);
+    "#,
+    );
     // maker is validated via escrow.has_one = maker — no L007
     assert!(!has_diagnostic(&report, LintRule::L007, "maker"));
 }
 
 #[test]
 fn l003_no_false_positive_for_init() {
-    let report = lint_source(r#"
+    let report = lint_source(
+        r#"
         declare_id!("11111111111111111111111111111111");
         #[program]
         mod p {
@@ -583,7 +590,8 @@ fn l003_no_false_positive_for_init() {
         }
         #[account(discriminator = 1)]
         pub struct Escrow { pub authority: Address, pub mint: Address }
-    "#);
+    "#,
+    );
     // escrow is init — Address fields are being set, not verified. No L003.
     assert!(!has_diagnostic(&report, LintRule::L003, "escrow"));
 }

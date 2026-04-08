@@ -1,8 +1,12 @@
 //! Cross-instruction field tracking.
-use super::constraints::FieldClass;
-use super::types::{Diagnostic, LintRule, Severity, TypeRegistry};
-use crate::parser::ParsedProgram;
-use std::collections::HashMap;
+use {
+    super::{
+        constraints::FieldClass,
+        types::{Diagnostic, LintRule, Severity, TypeRegistry},
+    },
+    crate::parser::ParsedProgram,
+    std::collections::HashMap,
+};
 
 struct TypeUsage {
     instruction_name: String,
@@ -15,10 +19,7 @@ struct TypeUsage {
     token_authority: Option<String>,
 }
 
-pub fn check_cross_instruction(
-    parsed: &ParsedProgram,
-    registry: &TypeRegistry,
-) -> Vec<Diagnostic> {
+pub fn check_cross_instruction(parsed: &ParsedProgram, registry: &TypeRegistry) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     // Build map: type_name -> [usages across instructions]
@@ -86,7 +87,8 @@ pub fn check_cross_instruction(
                         accounts_struct: usage.accounts_struct.clone(),
                         field: Some(usage.field_name.clone()),
                         message: format!(
-                            "Cross-instruction: `{}.{}` is set in `{}` but `{}` reads {} without verifying `{}`.",
+                            "Cross-instruction: `{}.{}` is set in `{}` but `{}` reads {} without \
+                             verifying `{}`.",
                             type_name,
                             addr_field,
                             init_instructions[0].instruction_name,

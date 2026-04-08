@@ -336,6 +336,18 @@ fn extract_seed_account_refs(seeds_directive: &str) -> Vec<String> {
             {
                 refs.push(before_dot.to_string());
             }
+        } else {
+            // Also match bare identifiers (no dot) that aren't byte strings
+            // or numeric refs — e.g., seeds = [b"vault", user] where `user`
+            // is an account reference.
+            let trimmed = normalized.trim();
+            if !trimmed.is_empty()
+                && !trimmed.starts_with("b\"")
+                && !trimmed.starts_with('&')
+                && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_')
+            {
+                refs.push(trimmed.to_string());
+            }
         }
     }
 
@@ -382,6 +394,14 @@ mod tests {
             r#"seeds = [b"escrow", maker.key(), borrower.address()]"#,
         );
         assert_eq!(refs, vec!["maker", "borrower"]);
+    }
+
+    #[test]
+    fn extract_seed_refs_bare_ident() {
+        let refs = extract_seed_account_refs(
+            r#"seeds = [b"vault", user]"#,
+        );
+        assert_eq!(refs, vec!["user"]);
     }
 
     #[test]

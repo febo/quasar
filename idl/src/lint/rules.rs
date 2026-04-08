@@ -330,6 +330,10 @@ fn l007_unchecked_account(graph: &AccountGraph, diagnostics: &mut Vec<Diagnostic
         if is_suppressed(&node.constraints.suppressions, LintRule::L007) {
             continue;
         }
+        // Skip if another account's constraint validates this one (inbound edge)
+        if graph.node_degree(&node.name) > 0 {
+            continue;
+        }
 
         diagnostics.push(Diagnostic {
             rule: LintRule::L007,

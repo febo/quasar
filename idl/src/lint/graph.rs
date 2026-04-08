@@ -318,8 +318,9 @@ fn detect_missing_edges(
         match &node.field_class {
             // For Account<T>: look up T's Address fields in the registry.
             // Each Address field suggests a relationship to another account in
-            // the struct.
-            FieldClass::Account { inner_type } => {
+            // the struct.  Skip init accounts — their Address fields are being
+            // set, not verified.
+            FieldClass::Account { inner_type } if !node.constraints.is_init => {
                 let addr_fields = registry.get_address_fields(inner_type);
                 for addr_field in &addr_fields {
                     // The Address field name should correspond to another

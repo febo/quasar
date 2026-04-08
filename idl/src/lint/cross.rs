@@ -11,6 +11,8 @@ struct TypeUsage {
     is_init: bool,
     has_ones: Vec<String>,
     seed_refs: Vec<String>,
+    token_mint: Option<String>,
+    token_authority: Option<String>,
 }
 
 pub fn check_cross_instruction(
@@ -42,6 +44,8 @@ pub fn check_cross_instruction(
                         is_init: field.constraints.is_init,
                         has_ones: field.constraints.has_ones.clone(),
                         seed_refs: field.constraints.seeds_account_refs.clone(),
+                        token_mint: field.constraints.token_mint.clone(),
+                        token_authority: field.constraints.token_authority.clone(),
                     });
             }
         }
@@ -50,6 +54,11 @@ pub fn check_cross_instruction(
     // For each type used across 2+ instructions with at least one init
     for (type_name, usages) in &type_usage {
         if usages.len() < 2 {
+            continue;
+        }
+
+        // Skip built-in SPL types — they use token::mint/authority, not has_one
+        if matches!(type_name.as_str(), "Token" | "TokenAccount" | "Mint") {
             continue;
         }
 
@@ -65,8 +74,10 @@ pub fn check_cross_instruction(
 
         for addr_field in &addr_fields {
             for usage in usages.iter().filter(|u| !u.is_init) {
-                let verified =
-                    usage.has_ones.contains(addr_field) || usage.seed_refs.contains(addr_field);
+                let verified = usage.has_ones.contains(addr_field)
+                    || usage.seed_refs.contains(addr_field)
+                    || (addr_field == "mint" && usage.token_mint.is_some())
+                    || (addr_field == "owner" && usage.token_authority.is_some());
 
                 if !verified {
                     diagnostics.push(Diagnostic {

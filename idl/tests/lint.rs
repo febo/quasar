@@ -515,6 +515,80 @@ fn cross_instruction_detects_unverified_field() {
 }
 
 // -------------------------------------------------------------------------
+// Bug-fix regressions — bare-ident seeds, has_one target, init accounts
+// -------------------------------------------------------------------------
+
+#[test]
+fn bare_ident_seeds_suppress_has_one() {
+    let report = lint_source(r#"
+        declare_id!("11111111111111111111111111111111");
+        #[program]
+        mod p {
+            use super::*;
+            #[instruction(discriminator = [1])]
+            pub fn deposit(ctx: Ctx<Deposit>) -> Result<(), ProgramError> { Ok(()) }
+        }
+        #[derive(Accounts)]
+        pub struct Deposit<'info> {
+            pub user: Signer,
+            #[account(seeds = [b"vault", user], bump)]
+            pub vault: UncheckedAccount<'info>,
+        }
+    "#);
+    // vault is PDA-seeded with user — should NOT trigger L001 or L007
+    assert!(!has_diagnostic(&report, LintRule::L001, "vault"));
+    assert!(!has_diagnostic(&report, LintRule::L007, "vault"));
+}
+
+#[test]
+fn l007_no_false_positive_for_has_one_target() {
+    let report = lint_source(r#"
+        declare_id!("11111111111111111111111111111111");
+        #[program]
+        mod p {
+            use super::*;
+            #[instruction(discriminator = [1])]
+            pub fn take(ctx: Ctx<Take>) -> Result<(), ProgramError> { Ok(()) }
+        }
+        #[derive(Accounts)]
+        pub struct Take<'info> {
+            pub authority: Signer,
+            #[account(has_one = authority, has_one = maker)]
+            pub escrow: Account<Escrow<'info>>,
+            pub maker: UncheckedAccount<'info>,
+        }
+        #[account(discriminator = 1)]
+        pub struct Escrow { pub authority: Address, pub maker: Address }
+    "#);
+    // maker is validated via escrow.has_one = maker — no L007
+    assert!(!has_diagnostic(&report, LintRule::L007, "maker"));
+}
+
+#[test]
+fn l003_no_false_positive_for_init() {
+    let report = lint_source(r#"
+        declare_id!("11111111111111111111111111111111");
+        #[program]
+        mod p {
+            use super::*;
+            #[instruction(discriminator = [1])]
+            pub fn create(ctx: Ctx<Create>) -> Result<(), ProgramError> { Ok(()) }
+        }
+        #[derive(Accounts)]
+        pub struct Create<'info> {
+            pub authority: Signer,
+            pub mint: Account<Mint<'info>>,
+            #[account(init, payer = authority)]
+            pub escrow: Account<Escrow<'info>>,
+        }
+        #[account(discriminator = 1)]
+        pub struct Escrow { pub authority: Address, pub mint: Address }
+    "#);
+    // escrow is init — Address fields are being set, not verified. No L003.
+    assert!(!has_diagnostic(&report, LintRule::L003, "escrow"));
+}
+
+// -------------------------------------------------------------------------
 // Auto-fix
 // -------------------------------------------------------------------------
 

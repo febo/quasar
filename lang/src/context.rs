@@ -50,7 +50,7 @@ pub struct Context<'input> {
 ///
 /// Use [`CtxWithRemaining`] for instructions that need
 /// `remaining_accounts()`.
-pub struct Ctx<'input, T: ParseAccounts + ParseAccountsUnchecked + AccountCount> {
+pub struct Ctx<'input, T: ParseAccounts<'input> + ParseAccountsUnchecked<'input> + AccountCount> {
     /// Validated and typed account struct.
     pub accounts: T,
 
@@ -64,7 +64,9 @@ pub struct Ctx<'input, T: ParseAccounts + ParseAccountsUnchecked + AccountCount>
     pub data: &'input [u8],
 }
 
-impl<'input, T: ParseAccounts + ParseAccountsUnchecked + AccountCount> Ctx<'input, T> {
+impl<'input, T: ParseAccounts<'input> + ParseAccountsUnchecked<'input> + AccountCount>
+    Ctx<'input, T>
+{
     #[inline(always)]
     pub fn new(ctx: Context<'input>) -> Result<Self, ProgramError> {
         let program_id_addr = unsafe { as_address(ctx.program_id) };
@@ -92,7 +94,10 @@ impl<'input, T: ParseAccounts + ParseAccountsUnchecked + AccountCount> Ctx<'inpu
 /// when inspecting trailing accounts in local logic, or
 /// `remaining_accounts_passthrough()` when forwarding a variable number of
 /// accounts to a downstream CPI.
-pub struct CtxWithRemaining<'input, T: ParseAccounts + ParseAccountsUnchecked + AccountCount> {
+pub struct CtxWithRemaining<
+    'input,
+    T: ParseAccounts<'input> + ParseAccountsUnchecked<'input> + AccountCount,
+> {
     /// Validated and typed account struct.
     pub accounts: T,
 
@@ -115,7 +120,9 @@ pub struct CtxWithRemaining<'input, T: ParseAccounts + ParseAccountsUnchecked + 
     accounts_boundary: *const u8,
 }
 
-impl<'input, T: ParseAccounts + ParseAccountsUnchecked + AccountCount> CtxWithRemaining<'input, T> {
+impl<'input, T: ParseAccounts<'input> + ParseAccountsUnchecked<'input> + AccountCount>
+    CtxWithRemaining<'input, T>
+{
     #[inline(always)]
     pub fn new(ctx: Context<'input>) -> Result<Self, ProgramError> {
         let program_id_addr = unsafe { as_address(ctx.program_id) };

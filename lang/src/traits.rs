@@ -121,10 +121,10 @@ pub trait AccountCount {
 ///
 /// Returns the parsed struct and a `Bumps` companion containing any PDA bump
 /// seeds discovered during validation.
-pub trait ParseAccounts: Sized {
+pub trait ParseAccounts<'input>: Sized {
     type Bumps: Copy;
     fn parse(
-        accounts: &mut [AccountView],
+        accounts: &'input mut [AccountView],
         program_id: &Address,
     ) -> Result<(Self, Self::Bumps), ProgramError>;
 
@@ -137,7 +137,7 @@ pub trait ParseAccounts: Sized {
     /// The default implementation ignores `data` and delegates to `parse`.
     #[inline(always)]
     fn parse_with_instruction_data(
-        accounts: &mut [AccountView],
+        accounts: &'input mut [AccountView],
         _data: &[u8],
         program_id: &Address,
     ) -> Result<(Self, Self::Bumps), ProgramError> {
@@ -178,12 +178,12 @@ pub trait ParseAccounts: Sized {
 ///
 /// The caller must ensure `accounts.len() == Self::COUNT`.
 #[doc(hidden)]
-pub unsafe trait ParseAccountsUnchecked: ParseAccounts {
+pub unsafe trait ParseAccountsUnchecked<'input>: ParseAccounts<'input> {
     /// # Safety
     ///
     /// `accounts.len()` must exactly match `Self::COUNT`.
     unsafe fn parse_unchecked(
-        accounts: &mut [AccountView],
+        accounts: &'input mut [AccountView],
         program_id: &Address,
     ) -> Result<(Self, Self::Bumps), ProgramError>;
 
@@ -192,7 +192,7 @@ pub unsafe trait ParseAccountsUnchecked: ParseAccounts {
     /// `accounts.len()` must exactly match `Self::COUNT`.
     #[inline(always)]
     unsafe fn parse_with_instruction_data_unchecked(
-        accounts: &mut [AccountView],
+        accounts: &'input mut [AccountView],
         _data: &[u8],
         program_id: &Address,
     ) -> Result<(Self, Self::Bumps), ProgramError> {
